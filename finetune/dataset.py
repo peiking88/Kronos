@@ -1,6 +1,7 @@
 import pickle
 import random
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import Dataset
 from config import Config
@@ -15,13 +16,11 @@ class QlibDataset(Dataset):
 
     Args:
         data_type (str): The type of dataset to load, either 'train' or 'val'.
-
-    Raises:
-        ValueError: If `data_type` is not 'train' or 'val'.
+        config: Optional config object override (default: Config()).
     """
 
-    def __init__(self, data_type: str = 'train'):
-        self.config = Config()
+    def __init__(self, data_type: str = 'train', config=None):
+        self.config = config if config is not None else Config()
         if data_type not in ['train', 'val']:
             raise ValueError("data_type must be 'train' or 'val'")
         self.data_type = data_type
@@ -52,6 +51,11 @@ class QlibDataset(Dataset):
         print(f"[{data_type.upper()}] Pre-computing sample indices...")
         for symbol in self.symbols:
             df = self.data[symbol].reset_index()
+            # Handle both 'datetime' and 'date' index column names
+            ts_col = 'datetime' if 'datetime' in df.columns else df.columns[0]
+            if ts_col != 'datetime':
+                df = df.rename(columns={ts_col: 'datetime'})
+            df['datetime'] = pd.to_datetime(df['datetime'])
             series_len = len(df)
             num_samples = series_len - self.window + 1
 
