@@ -68,6 +68,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# External dependencies (never commit)
+external/
+
 # Temporary files
 *.tmp
 *.temp
