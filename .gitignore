@@ -48,12 +48,17 @@ Desktop.ini
 *.parquet
 *.h5
 *.hdf5
+*.pkl
 
 # Model files (large files)
 *.pth
 *.pt
 *.ckpt
 *.bin
+*.safetensors
+
+# Output artifacts
+outputs/
 
 # Logs
 *.log
