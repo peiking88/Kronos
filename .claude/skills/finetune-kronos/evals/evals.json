@@ -1,0 +1,23 @@
+{
+  "skill_name": "finetune-kronos",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我电脑上装了通达信，本地 .day 数据已经下到 ~/.local/share/tdxcfv/drive_c/tc/vipdoc/sh/lday 这边。RTX 4060 Laptop 8G 显存。我想用这些数据 fine-tune Kronos 模型来做 A 股短线预测，从环境装起一直跑到能预测上证指数那一步。请告诉我完整步骤，每步要敲什么命令、什么时候应该看到什么输出文件以及大小，OOM 之类的常见坑怎么处理。",
+      "expected_output": "技能触发，给出 Step 1-4 的完整命令序列；明确 venv 与 HF_ENDPOINT 的设置方式；说明 Tokenizer ~5GB / Predictor ~6.3GB 的显存占用与 OOM 时的回退参数；给出每步产物体积量级供验证。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "上次微调了一半训练机重启了，Tokenizer 那个 best_model 存下来了在 outputs/tdx_finetune/tdx_tokenizer/checkpoints/best_model 里，但 Predictor 还没跑完。现在想从头继续 Predictor 这一段，命令该怎么写? 还要重新跑 Tokenizer 吗?",
+      "expected_output": "技能触发；明确说明 Tokenizer 不需要重跑，直接执行 train_predictor_tdx.py 并通过 --tokenizer-path 指向已保存的 best_model 即可；给出完整命令。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "把项目从 ~/financial/Kronos 整个挪到 ~/peiking88/Kronos 之后，source .venv/bin/activate 之后 pip 直接报 bad interpreter，python -c 'import torch' 也跑不起来。模型加载还会冒一句 missing N required positional arguments。怎么修?",
+      "expected_output": "技能触发『环境重建 / 项目迁移』章节；指出 venv 的 shebang 指向旧路径 + HF_ENDPOINT 未生效是两个独立症状；给出 rm -rf .venv → 重建 → 写入 HF_ENDPOINT → 重装依赖的修复序列。",
+      "files": []
+    }
+  ]
+}

@@ -378,3 +378,22 @@ This project is licensed under the [MIT License](./LICENSE).
 
 
 
+
+### 2026-05-05 09:35:17
+```
+ .gitignore                                   |    3 +
+ docs/codebase/ARCHITECTURE.md                |   79 ++
+ docs/codebase/CONCERNS.md                    |   68 ++
+ docs/codebase/CONVENTIONS.md                 |   50 ++
+ docs/codebase/INTEGRATIONS.md                |   48 ++
+ docs/codebase/STACK.md                       |   74 ++
+ docs/codebase/STRUCTURE.md                   |   55 ++
+ docs/codebase/TESTING.md                     |   60 ++
+ docs/codebase/WORKFLOWS.md                   |  214 ++++++
+ requirements.txt                             |    2 +-
+ summary.md                                   |  183 +----
+ tdxdata/.gitignore                           |   14 +
+ tdxdata/.trae/rules/project_rules.md         |   59 ++
+ tdxdata/README.md                            |  367 ++++++++++
+ tdxdata/docs/PRD.md                          |  209 ++++++
+```
