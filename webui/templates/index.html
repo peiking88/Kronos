@@ -648,20 +648,45 @@
         // Initialize application
         async function initializeApp() {
             console.log('🚀 Initializing Kronos Web UI...');
-            
+
             // Load available models
             await loadAvailableModels();
-            
+
             // Load data file list
             await loadDataFiles();
-            
+
             // Set up event listeners
             setupEventListeners();
-            
+
             // Initialize time slider
             initializeTimeSlider();
-            
+
             console.log('✅ Application initialization completed');
+
+            // Auto-load defaults: base model + data.pkl
+            await autoLoadDefaults();
+        }
+
+        async function autoLoadDefaults() {
+            // 1. Auto-select and load base model
+            const modelSelect = document.getElementById('model-select');
+            if (modelSelect && availableModels['kronos-base']) {
+                modelSelect.value = 'kronos-base';
+                console.log('🔄 Auto-loading base model...');
+                await loadModel();
+            }
+
+            // 2. Auto-select and load data.pkl
+            const dataSelect = document.getElementById('data-file-select');
+            const dataOptions = Array.from(dataSelect.options).map(o => o.value);
+            const dataPkl = dataOptions.find(p => p.endsWith('tdx_import/1d/test_data.pkl'));
+            if (dataSelect && dataPkl) {
+                dataSelect.value = dataPkl;
+                console.log('🔄 Auto-loading data.pkl...');
+                await loadData();
+            }
+
+            console.log('✅ Default model and data loaded');
         }
 
         // Load available models

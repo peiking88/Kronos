@@ -7,6 +7,8 @@ from tdxdata.errors.exceptions import (
     StorageError,
     TdxDataError,
 )
+from tdxdata.errors.circuit_breaker import CircuitBreaker
+from tdxdata.errors.retry import RetryPolicy
 
 __all__ = [
     "TdxDataError",
@@ -16,4 +18,6 @@ __all__ = [
     "PluginNotFoundError",
     "RetryExhaustedError",
     "CircuitBreakerOpenError",
+    "CircuitBreaker",
+    "RetryPolicy",
 ]

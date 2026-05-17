@@ -1,4 +1,5 @@
 import os
+import pickle
 import pandas as pd
 import numpy as np
 import json
@@ -54,31 +55,52 @@ AVAILABLE_MODELS = {
         'context_length': 512,
         'params': '102.3M',
         'description': 'Base model, provides better prediction quality'
+    },
+    'kronos-tdx': {
+        'name': 'Kronos-TDX (Fine-tuned)',
+        'model_id': './outputs/tdx_finetune/tdx_predictor/checkpoints/best_model',
+        'tokenizer_id': './outputs/tdx_finetune/tdx_tokenizer/checkpoints/best_model',
+        'context_length': 512,
+        'params': '102.3M',
+        'description': 'TDX 后复权数据微调，中位误差 2.3%'
     }
 }
 
 def load_data_files():
-    """Scan data directory and return available data files"""
+    """Scan data directory recursively and return available data files"""
     data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
     data_files = []
-    
+
     if os.path.exists(data_dir):
-        for file in os.listdir(data_dir):
-            if file.endswith(('.csv', '.feather')):
-                file_path = os.path.join(data_dir, file)
-                file_size = os.path.getsize(file_path)
-                data_files.append({
-                    'name': file,
-                    'path': file_path,
-                    'size': f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.1f} MB"
-                })
-    
+        for root, dirs, files in os.walk(data_dir):
+            for file in files:
+                if file.endswith(('.csv', '.feather', '.pkl')):
+                    file_path = os.path.join(root, file)
+                    file_size = os.path.getsize(file_path)
+                    rel_path = os.path.relpath(file_path, data_dir)
+                    data_files.append({
+                        'name': rel_path,
+                        'path': file_path,
+                        'size': f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.1f} MB"
+                    })
+
     return data_files
 
 def load_data_file(file_path):
     """Load data file"""
     try:
-        if file_path.endswith('.csv'):
+        if file_path.endswith('.pkl'):
+            with open(file_path, 'rb') as f:
+                pkl_data = pickle.load(f)
+            parts = []
+            for sym, sdf in pkl_data.items():
+                sdf = sdf.copy()
+                sdf['symbol'] = sym
+                if sdf.index.name in ('date', 'datetime') or isinstance(sdf.index, pd.DatetimeIndex):
+                    sdf = sdf.reset_index()
+                parts.append(sdf)
+            df = pd.concat(parts, ignore_index=True)
+        elif file_path.endswith('.csv'):
             df = pd.read_csv(file_path)
         elif file_path.endswith('.feather'):
             df = pd.read_feather(file_path)

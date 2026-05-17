@@ -1,38 +1,17 @@
 import logging
-import os
 from typing import Optional
 
 import pandas as pd
 
-from mootdx.reader import Reader
-
 from tdxdata.core.connection import TdxConnection
 from tdxdata.core.registry import register_source
 from tdxdata.sources.adjust import ADJUST_MAP, apply_adjust
-from tdxdata.sources.base import DataSourceBase
+from tdxdata.sources.base import (
+    DEFAULT_TDXDIR, FREQUENCY_MAP, PERIOD_MAP, RESAMPLE_MAP,
+    DataSourceBase, get_tdx_reader, resample_kline,
+)
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_TDXDIR = os.path.expanduser("~/.local/share/tdxcfv/drive_c/tc/")
-
-PERIOD_METHOD = {
-    "1d": "daily",
-    "1m": "minute_1",
-    "5m": "minute_5",
-}
-
-FREQUENCY_MAP = {
-    "1m": 8,
-    "5m": 0,
-    "15m": 1,
-    "30m": 2,
-    "1h": 3,
-    "1d": 9,
-    "1w": 5,
-    "1mon": 6,
-}
-
-STANDARD_COLUMNS = ["stock_code", "date", "open", "high", "low", "close", "volume", "amount"]
 
 
 @register_source("hybrid_kline")
@@ -44,13 +23,7 @@ class HybridKlineSource(DataSourceBase):
 
     def _get_reader(self):
         if self._reader is None:
-            tdxdir = self._tdxdir
-            if not os.path.isdir(tdxdir):
-                raise FileNotFoundError(
-                    f"TDX directory not found: {tdxdir}. "
-                    f"Set tdxdir parameter or ensure default path exists."
-                )
-            self._reader = Reader.factory(market="std", tdxdir=tdxdir)
+            self._reader = get_tdx_reader(self._tdxdir)
         return self._reader
 
     def fetch(
@@ -68,10 +41,10 @@ class HybridKlineSource(DataSourceBase):
         if not codes:
             raise ValueError("Either stock_list or stock_code must be provided")
 
-        if period not in PERIOD_METHOD:
+        if period not in FREQUENCY_MAP:
             raise ValueError(
                 f"Unsupported period '{period}'. "
-                f"Supported: {sorted(PERIOD_METHOD.keys())}"
+                f"Supported: {sorted(FREQUENCY_MAP.keys())}"
             )
 
         if tdxdir:
@@ -79,20 +52,49 @@ class HybridKlineSource(DataSourceBase):
             self._reader = None
 
         adjust = ADJUST_MAP.get(dividend_type)
-        result_parts = []
+        return self._batch_fetch(
+            codes,
+            lambda code: self._fetch_hybrid(code, start_date, end_date,
+                                            period, adjust),
+            label="hybrid_kline",
+        )
 
-        for code in codes:
-            try:
-                df = self._fetch_hybrid(code, start_date, end_date, period, adjust)
-                if df is not None and not df.empty:
-                    result_parts.append(df)
-            except Exception as e:
-                logger.error(f"Error in hybrid fetch for {code}: {e}")
+    def _compute_remote_range(
+        self,
+        local_df: pd.DataFrame,
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Determine the date range that needs to be fetched remotely.
 
-        if not result_parts:
-            return pd.DataFrame()
+        Returns (remote_start, remote_end) or (None, None) if local data covers
+        the requested range entirely.
+        """
+        local_start = local_df["date"].min()
+        local_end = local_df["date"].max()
+        start_dt = pd.Timestamp(start_date) if start_date else local_start
+        end_dt = pd.Timestamp(end_date) if end_date else pd.Timestamp.now().normalize()
 
-        return pd.concat(result_parts, ignore_index=True)
+        remote_start = None
+        remote_end = None
+
+        if local_start > start_dt:
+            remote_start = start_dt.strftime("%Y-%m-%d")
+            remote_end = (local_start - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            logger.info(
+                f"Local data starts at {local_start.date()}, "
+                f"fetching earlier data from {remote_start} to {remote_end}"
+            )
+
+        if local_end < end_dt:
+            remote_start = (local_end + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            remote_end = end_dt.strftime("%Y-%m-%d")
+            logger.info(
+                f"Local data ends at {local_end.date()}, "
+                f"fetching newer data from {remote_start} to {remote_end}"
+            )
+
+        return remote_start, remote_end
 
     def _fetch_hybrid(
         self,
@@ -102,64 +104,45 @@ class HybridKlineSource(DataSourceBase):
         period: str,
         adjust: Optional[str],
     ) -> Optional[pd.DataFrame]:
+        base_info = RESAMPLE_MAP.get(period)
+        if base_info:
+            base_df = self._fetch_hybrid(
+                code, start_date, end_date, base_info["base"], adjust,
+            )
+            if base_df is not None and not base_df.empty:
+                base_df = resample_kline(base_df, base_info["freq"])
+            return base_df
+
         local_df = self._read_local(code, period)
 
         if local_df is None or local_df.empty:
             logger.info(f"No local data for {code}, fetching all from network")
             return self._fetch_remote(code, start_date, end_date, period, adjust)
 
-        local_df = self._normalize(local_df, code)
+        local_df = self._normalize_kline_df(local_df, code)
+        start_dt = pd.Timestamp(start_date) if start_date else local_df["date"].min()
+        end_dt = pd.Timestamp(end_date) if end_date else pd.Timestamp.now().normalize()
 
-        local_end = local_df["date"].max()
-        local_start = local_df["date"].min()
+        remote_start, remote_end = self._compute_remote_range(
+            local_df, start_date, end_date
+        )
 
-        if start_date:
-            start_dt = pd.Timestamp(start_date)
-        else:
-            start_dt = local_start
-
-        if end_date:
-            end_dt = pd.Timestamp(end_date)
-        else:
-            end_dt = pd.Timestamp.now().normalize()
-
-        need_remote = False
-        remote_start = None
-        remote_end = None
-
-        if local_start > start_dt:
-            need_remote = True
-            remote_start = start_dt.strftime("%Y-%m-%d")
-            remote_end = (local_start - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-            logger.info(
-                f"Local data starts at {local_start.date()}, "
-                f"fetching earlier data from {remote_start} to {remote_end}"
-            )
-
-        if local_end < end_dt:
-            need_remote = True
-            remote_start = (local_end + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-            remote_end = end_dt.strftime("%Y-%m-%d")
-            logger.info(
-                f"Local data ends at {local_end.date()}, "
-                f"fetching newer data from {remote_start} to {remote_end}"
-            )
-
-        if not need_remote:
+        if remote_start is None and remote_end is None:
             df = local_df
             if start_date:
                 df = df[df["date"] >= start_dt]
             if end_date:
                 df = df[df["date"] <= end_dt]
             df = df.reset_index(drop=True)
-            if adjust and period == "1d":
-                df = apply_adjust(df, code, adjust)
+            if adjust and not df.empty:
+                df = apply_adjust(df, code, adjust,
+                                  quotes_client=self._connection.client)
             return df
 
         remote_df = self._fetch_remote(code, remote_start, remote_end, period, adjust=None)
 
         if remote_df is not None and not remote_df.empty:
-            remote_df = self._normalize(remote_df, code)
+            remote_df = self._normalize_kline_df(remote_df, code)
             combined = pd.concat([local_df, remote_df], ignore_index=True)
             combined = combined.drop_duplicates(subset=["date"], keep="last")
             combined = combined.sort_values("date").reset_index(drop=True)
@@ -172,8 +155,9 @@ class HybridKlineSource(DataSourceBase):
             combined = combined[combined["date"] <= end_dt]
         combined = combined.reset_index(drop=True)
 
-        if adjust and period == "1d":
-            combined = apply_adjust(combined, code, adjust)
+        if adjust and not combined.empty:
+            combined = apply_adjust(combined, code, adjust,
+                                    quotes_client=self._connection.client)
 
         return combined
 
@@ -184,7 +168,7 @@ class HybridKlineSource(DataSourceBase):
             logger.info("TDX directory not found, skipping local read")
             return None
 
-        method = PERIOD_METHOD[period]
+        method = PERIOD_MAP.get(period)
         if method == "daily":
             df = reader.daily(symbol=code)
         elif method == "minute_1":
@@ -197,10 +181,7 @@ class HybridKlineSource(DataSourceBase):
         if df is None or df.empty:
             return None
 
-        df = df.copy()
-        if df.index.name in ("date", "datetime"):
-            df.reset_index(inplace=True)
-        return df
+        return df.copy()
 
     def _fetch_remote(
         self,
@@ -235,19 +216,9 @@ class HybridKlineSource(DataSourceBase):
         if df is None or df.empty:
             return None
 
-        return df.copy()
+        df = self._normalize_kline_df(df, code)
 
-    def _normalize(self, df: pd.DataFrame, code: str) -> pd.DataFrame:
-        df["stock_code"] = code
-
-        if "vol" in df.columns and "volume" not in df.columns:
-            df["volume"] = df["vol"]
-
-        if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        elif "datetime" in df.columns:
-            df["date"] = pd.to_datetime(df["datetime"], errors="coerce")
-
-        keep = [c for c in STANDARD_COLUMNS if c in df.columns]
-        extra = [c for c in df.columns if c not in keep]
-        return df[keep + extra].copy()
+        if adjust:
+            df = apply_adjust(df, code, adjust,
+                              quotes_client=self._connection.client)
+        return df

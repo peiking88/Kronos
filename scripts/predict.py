@@ -11,8 +11,9 @@ Kronos 一键预测脚本
 功能:
     1. 从 TDX 本地数据导入指定股票最新行情
     2. Kronos 模型预测未来 N 日走势
-    3. 应用涨跌停约束
-    4. 输出 CSV + 交互式 HTML 图表
+    3. 回测校准（最近三个月）自动修正系统性偏差
+    4. 应用涨跌停约束
+    5. 输出 CSV + 交互式 HTML 图表
 """
 import argparse
 import os
@@ -21,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 
+import numpy as np
 import pandas as pd
 import torch
 
@@ -37,6 +39,8 @@ MODEL_MAP = {
 }
 LOOKBACK = 400
 LIMIT_RATE = 0.10
+BACKTEST_DAYS = 60      # 回测校准窗口（约三个月交易日）
+BACKTEST_CTX = 400       # 回测上下文天数
 
 
 # ── 工具函数 ──────────────────────────────────────────
@@ -147,6 +151,45 @@ def plot_result(hist_df, pred_df, tdx_key, out_html):
     fig.write_html(out_html)
 
 
+def backtest_calibrate(df, pred_len, model_name, device, temperature, top_p, sample_count):
+    """回测校准：用最近 BACKTEST_DAYS 天做回测，计算系统性偏差 ME。
+    返回 bias_correction（正值表示需要上调预测）。
+    """
+    if len(df) < BACKTEST_CTX + BACKTEST_DAYS:
+        print(f"  数据不足回测校准 (需 >= {BACKTEST_CTX + BACKTEST_DAYS}，实际 {len(df)})，跳过")
+        return 0.0
+
+    # 回测区间
+    backtest_df = df.iloc[-(BACKTEST_CTX + BACKTEST_DAYS):]
+    ctx_df = backtest_df.iloc[:BACKTEST_CTX]
+    actual_df = backtest_df.iloc[BACKTEST_CTX:]
+
+    ctx_ts = pd.Series(ctx_df.index.to_list())
+    actual_ts = pd.Series(actual_df.index.to_list())
+
+    print(f"  回测校准: 上下文 {ctx_df.index[0].date()}~{ctx_df.index[-1].date()} "
+          f"→ 预测 {actual_df.index[0].date()}~{actual_df.index[-1].date()}")
+
+    try:
+        bt_pred = run_predict(
+            ctx_df, BACKTEST_DAYS, model_name, device,
+            temperature, top_p, sample_count,
+        )
+    except Exception as e:
+        print(f"  回测预测失败: {e}，跳过校准")
+        return 0.0
+
+    actual_close = actual_df["close"].values
+    pred_close = bt_pred["close"].values
+    me = np.mean(pred_close - actual_close)
+    mae = np.mean(np.abs(pred_close - actual_close))
+    mape = np.mean(np.abs(pred_close - actual_close) / actual_close * 100)
+
+    print(f"  回测结果: ME={me:+.2f}, MAE={mae:.2f}, MAPE={mape:.2f}%")
+    print(f"  偏差校正值: {-me:+.2f}")
+    return -me  # 取反，校正值
+
+
 # ── 主流程 ────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
@@ -218,6 +261,20 @@ def main():
         if not args.no_limit:
             apply_price_limits(pred_df, last_close, LIMIT_RATE)
 
+        # 3.5 回测校准
+        bias_correction = 0.0
+        if not args.no_limit:  # 仅在启用涨跌停约束时做校准（正常预测场景）
+            bias_correction = backtest_calibrate(
+                df, args.pred_len, args.model, args.device,
+                args.temperature, args.top_p, args.samples,
+            )
+            if abs(bias_correction) > 0.01:
+                # 应用校正
+                for col in ["open", "high", "low", "close"]:
+                    pred_df[col] = pred_df[col] + bias_correction
+                # 校正后重新约束涨跌停
+                apply_price_limits(pred_df, last_close, LIMIT_RATE)
+
         # 4. 保存 CSV
         out_csv = os.path.join(args.output_dir, f"pred_{tdx_key}_{today_str}.csv")
         pred_df.to_csv(out_csv, index=False, float_format="%.2f")
@@ -238,6 +295,8 @@ def main():
 
         print(f"\n=== {tdx_key} 预测摘要 ===")
         print(f"收盘: {last_close:.2f}")
+        if abs(bias_correction) > 0.01:
+            print(f"偏差校正: {bias_correction:+.2f} (基于最近 {BACKTEST_DAYS} 天回测)")
         print(f"首日 ({pred_df.iloc[0]['date'].date()}): {pred_first:.2f} ({chg_first:+.2f}%)")
         print(f"末日 ({pred_df.iloc[-1]['date'].date()}): {pred_last:.2f} ({chg_last:+.2f}%)")
         print(f"区间: [{pred_df['close'].min():.2f}, {pred_df['close'].max():.2f}]")

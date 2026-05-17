@@ -8,6 +8,3 @@ from tdxdata.storage.base import StorageBase
 class DataFrameStorage(StorageBase):
     def save(self, df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         return df
-
-    def load(self, **kwargs) -> pd.DataFrame:
-        raise NotImplementedError("DataFrameStorage does not support loading from external source")

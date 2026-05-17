@@ -2,7 +2,9 @@
 name: finetune-kronos
 description: >
   Kronos 模型 TDX（通达信）本地数据微调全流程：单卡 8GB GPU 训练、A股后复权日线、
-  从数据导入到预测验证。适用于 Kronos fine-tuning、TDX 数据导入、续训/更新模型权重等场景。
+  从数据导入到预测验证。当用户提到 Kronos fine-tuning、TDX 数据导入、微调模型、
+  后复权日线、训练 tokenizer/predictor、预测 A 股、续训/更新权重、模型训练时使用此技能。
+  即使只提"微调"或"TDX数据"而不提 Kronos，也应触发。
 ---
 
 # TDX本地数据 微调 Kronos
@@ -339,3 +341,18 @@ TDX 本地数据起始约为 2024-06，每日增长。切分务必**按当前数
 - 测试集: 约 3 个月（END-3M ~ END）
 
 三段不重叠；lookback_window=90 所需的历史会自动从早于训练起点的数据里取。早期版本的 SKILL.md 让 train 与 val 区间重叠以"适配 lookback"——这是一个错误，已修正：lookback 通过自然历史前向取数即可，无需区间交叉。
+
+## 实践经验
+
+微调实战中积累的常见陷阱和最佳实践，详见 `references/lessons-learned.md`：
+
+| 条目 | 说明 |
+|---|---|
+| 后复权因子外推 | hfq 必须 `direction="backward"`，排查跳变方法 |
+| val/test lookback 补齐 | 从 train 末尾接 120 天，否则 val 集为空 |
+| 早停 | patience=5，节省 15-25% 训练时间 |
+| 报告价格规范 | 只显示实际市场价，不显示后复权价 |
+| 极端波动过滤 | 90 日回撤 >30% 或日波动 >8% 自动跳过 |
+| 模型偏置认知 | 均值回复 + 空头偏置，方向准确率 ~50% |
+| 依赖版本锁定 | mootdx≥2.0.3, opentdx≥0.5.10, tdxdata≥0.8.4 |
+| 一键预测 | `predict_stocks.py` 多股票预测 + md 报告 |

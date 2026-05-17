@@ -1,30 +1,22 @@
 [
-  {
-    "query": "我电脑上装了通达信，本地 .day 数据已经下到 ~/.local/share/tdxcfv/drive_c/tc/vipdoc/sh/lday 这边。RTX 4060 Laptop 8G 显存。我想用这些数据 fine-tune Kronos 模型来做 A 股短线预测，从环境装起一直跑到能预测上证指数那一步。",
-    "should_trigger": true
-  },
-  {
-    "query": "上次微调了一半训练机重启了，Tokenizer 那个 best_model 存下来了在 outputs/tdx_finetune/tdx_tokenizer/checkpoints/best_model 里，但 Predictor 还没跑完。现在想从头继续 Predictor 这一段，命令该怎么写? 还要重新跑 Tokenizer 吗?",
-    "should_trigger": true
-  },
-  {
-    "query": "把项目从 ~/financial/Kronos 整个挪到 ~/peiking88/Kronos 之后，source .venv/bin/activate 之后 pip 直接报 bad interpreter，python -c 'import torch' 也跑不起来。模型加载还会冒一句 missing N required positional arguments。怎么修?",
-    "should_trigger": true
-  },
-  {
-    "query": "帮我用 PyTorch 写一个 LSTM 模型来预测股票价格，用 tushare 数据源",
-    "should_trigger": false
-  },
-  {
-    "query": "how to install CUDA 12.4 on Ubuntu 22.04 with NVIDIA driver 550",
-    "should_trigger": false
-  },
-  {
-    "query": "通达信软件里怎么添加自定义均线指标? 我想设一个 144 日均线",
-    "should_trigger": false
-  },
-  {
-    "query": "Kronos 模型微调时需要多大显存? 我的 GPU 只有 4GB",
-    "should_trigger": true
-  }
+  {"query": "我的通达信数据在 ~/.local/share/tdxcfv 下面，帮我用这些数据微调 Kronos 模型，RTX 4060 8G 显存够吗", "should_trigger": true},
+  {"query": "用 TDX 本地日线数据对 Kronos-base 做 fine-tune，需要后复权，怎么操作", "should_trigger": true},
+  {"query": "kronos 微调后怎么预测？给我一个脚本能输入股票代码输出预测报告", "should_trigger": true},
+  {"query": "上次微调的 tokenizer 训完了，predictor 训到一半断了怎么续上", "should_trigger": true},
+  {"query": "train_tokenizer_tdx.py 跑起来好像 OOM 了，batch_size 要从哪里改", "should_trigger": true},
+  {"query": "数据导入后 val 集的 sample 数是 0，训练跑不了，什么原因", "should_trigger": true},
+  {"query": "预测结果里的价格都是好几百甚至上千，但我看行情软件里明明只有二十几块钱，是不是搞错了", "should_trigger": true},
+  {"query": "后复权数据里价格突然跳了好几倍，怀疑是复权因子有问题，怎么排查", "should_trigger": true},
+  {"query": "想把 Kronos 微调的 venv 环境从旧路径迁移到新机器上，怎么弄", "should_trigger": true},
+  {"query": "ok 我搞了个通达信本地数据，想做 A 股日线级别的微调，从数据导入到训练完大概需要多久", "should_trigger": true},
+  {"query": "帮我写一个 Python 脚本把 CSV 里的 stock data 转成 Kronos 6 字段格式", "should_trigger": false},
+  {"query": "用 PyTorch 写一个 LSTM 预测股票价格的模型，输入是 open high low close volume", "should_trigger": false},
+  {"query": "通达信软件怎么设置均线参数？我想把 MA5 MA10 MA20 都显示出来", "should_trigger": false},
+  {"query": "帮我找一下 Kronos 论文里关于 tokenizer 的那段，看看 vq-vae 的 codebook size 是怎么定的", "should_trigger": false},
+  {"query": "在 huggingface 上搜一下有没有中文金融 NLP 的预训练模型", "should_trigger": false},
+  {"query": "用 akshare 拉一下 2024 年沪深 300 的日线数据，存成 parquet", "should_trigger": false},
+  {"query": "给我解释一下 transformer 的 self-attention 机制，用代码示例", "should_trigger": false},
+  {"query": "下载 Kronos-base 模型然后对 BTC 的 5 分钟 K 线做一下预测，看看效果", "should_trigger": false},
+  {"query": "用 tushare 获取 A 股历史行情，做一下因子分析，看看哪些因子有效", "should_trigger": false},
+  {"query": "帮我把 outputs 目录下的 .safetensors 模型文件压缩打包，我要发给同事", "should_trigger": false}
 ]

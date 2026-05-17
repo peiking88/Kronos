@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class RealtimeSnapshotSource(DataSourceBase):
     SNAPSHOT_FIELDS = [
         "stock_code", "name", "datetime",
-        "open", "high", "low", "close", "last_close",
+        "open", "high", "low", "close", "pre_close",
         "volume", "amount",
         "bid_price1", "bid_volume1",
         "bid_price2", "bid_volume2",
@@ -54,8 +54,8 @@ class RealtimeSnapshotSource(DataSourceBase):
             "high": "high",
             "low": "low",
             "price": "close",
-            "last_close": "last_close",
-            "vol": "volume",
+            "pre_close": "pre_close",
+            "volume": "volume",
             "amount": "amount",
             "bid1": "bid_price1",
             "ask1": "ask_price1",

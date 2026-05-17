@@ -574,6 +574,13 @@ class TdxDataImporter:
 
         return df
 
+    def _get_quotes_client(self):
+        """Lazily create a Quotes client for factor fetching."""
+        if not hasattr(self, '_quotes_client'):
+            from mootdx.quotes import Quotes
+            self._quotes_client = Quotes.factory(market='std')
+        return self._quotes_client
+
     def _adjust_with_cache(
         self, df: pd.DataFrame, code: str
     ) -> pd.DataFrame:
@@ -592,9 +599,12 @@ class TdxDataImporter:
                 pass
 
         try:
-            df_adjusted = apply_adjust(df, code, self._adjust_code)
+            quotes = self._get_quotes_client()
+            df_adjusted = apply_adjust(df, code, self._adjust_code,
+                                       quotes_client=quotes)
             from tdxdata.sources.adjust import fetch_factor
-            factor_df = fetch_factor(code, self._adjust_code)
+            factor_df = fetch_factor(code, self._adjust_code,
+                                     quotes_client=quotes)
             if factor_df is not None and not factor_df.empty:
                 os.makedirs(self._factor_cache_dir, exist_ok=True)
                 factor_df.to_pickle(cache_file)

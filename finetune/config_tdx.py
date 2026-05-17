@@ -5,9 +5,8 @@ class TdxFineTuneConfig:
     """
     Single-GPU fine-tuning configuration for Kronos using TDX local data.
 
-    TDX local data covers ~2024-06-03 to ~2026-04-30 with ~5250 A-share stocks.
+    TDX local data covers ~1996 to present with ~6500 A-share stocks (ex-BJ).
     Uses 后复权 (hfq/back adjustment) to match original Kronos Qlib training data.
-    The short history (~2 years) makes this a domain-adaptation fine-tune.
     """
 
     def __init__(self):
@@ -17,9 +16,9 @@ class TdxFineTuneConfig:
         self.qlib_data_path = "~/.qlib/qlib_data/cn_data"  # Not used; kept for compat
         self.instrument = 'csi300'
 
-        # TDX data adjusted to available local data range (2024-06 ~ 2026-04)
-        self.dataset_begin_time = "2024-06-01"
-        self.dataset_end_time = "2026-04-30"
+        # TDX data date range (full history to present)
+        self.dataset_begin_time = "2011-01-01"
+        self.dataset_end_time = "2026-05-16"
 
         # Sliding window parameters
         self.lookback_window = 90
@@ -36,11 +35,11 @@ class TdxFineTuneConfig:
         # =================================================================
         # Dataset Splitting & Paths
         # =================================================================
-        # Narrower splits to fit ~2 years of TDX data
-        self.train_time_range = ["2024-06-01", "2025-12-31"]
-        self.val_time_range = ["2025-10-01", "2026-03-31"]
-        self.test_time_range = ["2026-01-01", "2026-04-30"]
-        self.backtest_time_range = ["2026-01-01", "2026-04-30"]
+        # Non-overlapping splits: train(14yr) | val(3.5mo) | test(3mo)
+        self.train_time_range = ["2011-01-01", "2025-10-31"]
+        self.val_time_range = ["2025-11-01", "2026-02-14"]
+        self.test_time_range = ["2026-02-15", "2026-05-16"]
+        self.backtest_time_range = ["2026-02-15", "2026-05-16"]
 
         # Directory for processed pickle datasets (produced by tdx_import.py)
         self.dataset_path = "./data/tdx_import"
@@ -65,6 +64,9 @@ class TdxFineTuneConfig:
         # Learning rates
         self.tokenizer_learning_rate = 2e-4
         self.predictor_learning_rate = 4e-5
+
+        # Early stopping
+        self.early_stop_patience = 5
 
         # Gradient accumulation (tokenizer)
         self.accumulation_steps = 1

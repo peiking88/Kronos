@@ -33,9 +33,9 @@ class TickDataSource(DataSourceBase):
         col_map = {
             "time": "datetime",
             "price": "price",
-            "vol": "volume",
+            "volume": "volume",
             "num": "order_id",
-            "buyorsell": "buy_sell_flag",
+            "direction": "buy_sell_flag",
         }
         result = self._normalize_columns(result, col_map)
 

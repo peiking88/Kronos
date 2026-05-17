@@ -3,13 +3,12 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from tdxdata.core.connection import TdxConnection
-from tdxdata.core.data_manager import DataManager
-from tdxdata.core.registry import PluginRegistry
-from tdxdata.errors.resource import ResourceManager
-from tdxdata.logging.logger import get_logger
+from mootdx.consts import MARKET_SH, MARKET_SZ
 
-logger = get_logger()
+from tdxdata.core.connection import ResourceManager, TdxConnection
+from tdxdata.core.data_manager import DataManager
+
+logger = logging.getLogger(__name__)
 
 
 class TdxData:
@@ -19,6 +18,7 @@ class TdxData:
         self._connection = TdxConnection()
         self._data_manager: Optional[DataManager] = None
         self._resource_manager = ResourceManager(self._connection)
+        self._stock_cache: dict[int, pd.DataFrame] = {}
 
     def __enter__(self):
         return self
@@ -100,9 +100,7 @@ class TdxData:
         stock_code: str,
         sections: Optional[list[str]] = None,
     ) -> dict[str, pd.DataFrame]:
-        self._ensure_connected()
-        assert self._data_manager is not None
-        return self._data_manager.fetch(
+        return self.fetch(
             source="f10", stock_code=stock_code, sections=sections
         )
 
@@ -180,24 +178,49 @@ class TdxData:
             output_path=output_path,
         )
 
-    def to_qlib(
-        self,
-        stock_list: list[str],
-        period: str = "1d",
-        dividend_type: str = "none",
-        tdxdir: Optional[str] = None,
-        qlib_dir: str = "./data/qlib",
-        instrument_name: str = "all",
-    ) -> dict:
-        from tdxdata.qlib.converter import QlibConverter
+    def sync_status(self, stock_code: str, data_type: str = "history_kline") -> Optional[str]:
+        """查询上次同步时间。
 
-        converter = QlibConverter(tdxdir=tdxdir, qlib_dir=qlib_dir)
-        return converter.convert(
-            stock_list=stock_list,
-            period=period,
-            dividend_type=dividend_type,
-            instrument_name=instrument_name,
-        )
+        Args:
+            stock_code: 股票代码
+            data_type: 数据类型，如 "history_kline"、"local_kline"
+
+        Returns:
+            上次同步日期（YYYY-MM-DD），未同步返回 None
+        """
+        self._ensure_connected()
+        assert self._data_manager is not None
+        return self._data_manager.sync_manager.get_last_sync(stock_code, data_type)
+
+    def _get_stocks(self, market: int) -> pd.DataFrame:
+        """获取指定市场的股票列表（带缓存）。"""
+        if market not in self._stock_cache:
+            self._ensure_connected()
+            self._stock_cache[market] = self._connection.client.stocks(market=market)
+        return self._stock_cache[market]
+
+    @staticmethod
+    def _market_from_code(code: str) -> int:
+        """根据股票代码推断市场。6/9 开头为沪市，其余为深市。"""
+        if code[0] in ("6", "9"):
+            return MARKET_SH
+        return MARKET_SZ
+
+    def get_stock_name(self, stock_code: str) -> Optional[str]:
+        """由股票代码获取股票名称。
+
+        Args:
+            stock_code: 股票代码，如 "600519"
+
+        Returns:
+            股票名称，如 "贵州茅台"；未找到返回 None
+        """
+        market = self._market_from_code(stock_code)
+        df = self._get_stocks(market)
+        matched = df[df["code"] == stock_code]
+        if matched.empty:
+            return None
+        return str(matched["name"].values[0])
 
     def _ensure_connected(self) -> None:
         if self._data_manager is None:

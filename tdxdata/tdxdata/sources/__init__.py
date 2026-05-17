@@ -5,6 +5,7 @@ from tdxdata.sources.tick import TickDataSource
 from tdxdata.sources.financial import FinancialDataSource
 from tdxdata.sources.f10 import F10DataSource
 from tdxdata.sources.daily_basic import DailyBasicSource
+from tdxdata.sources.hybrid_kline import HybridKlineSource
 from tdxdata.sources.local_kline import LocalKlineSource
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "FinancialDataSource",
     "F10DataSource",
     "DailyBasicSource",
+    "HybridKlineSource",
     "LocalKlineSource",
 ]

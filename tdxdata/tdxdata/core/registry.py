@@ -17,9 +17,6 @@ _SOURCE_MODULES = [
 
 _STORAGE_MODULES = [
     "tdxdata.storage.dataframe",
-    "tdxdata.storage.csv",
-    "tdxdata.storage.sqlite",
-    "tdxdata.storage.parquet",
 ]
 
 

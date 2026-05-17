@@ -107,6 +107,8 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
     best_val_loss = float('inf')
     start_time = time.time()
     accum_steps = config.get('predictor_accumulation', 1)
+    patience = config.get('early_stop_patience', 5)
+    no_improve = 0
 
     for epoch_idx in range(config['epochs']):
         epoch_start = time.time()
@@ -188,14 +190,21 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
               f"| Val Loss: {avg_val_loss:.4f} "
               f"| Time: {elapsed/60:.1f}m ---")
 
-        if avg_val_loss < best_val_loss:
+        if avg_val_loss < best_val_loss - 1e-6:
             best_val_loss = avg_val_loss
+            no_improve = 0
             ckpt_path = os.path.join(save_dir, 'checkpoints', 'best_model')
             model.save_pretrained(ckpt_path)
             print(f"  -> Best model saved to {ckpt_path} (val_loss={best_val_loss:.4f})")
+        else:
+            no_improve += 1
+            if no_improve >= patience:
+                print(f"  -> Early stopping at epoch {epoch_idx+1} "
+                      f"(no improvement for {patience} epochs)")
+                break
 
     total_time = time.time() - start_time
-    print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
+    print(f"\nTraining complete ({epoch_idx+1}/{config['epochs']} epochs). Best val loss: {best_val_loss:.4f}")
     print(f"Total time: {total_time/3600:.1f}h")
     print(f"Model saved to: {save_dir}/checkpoints/best_model")
 
