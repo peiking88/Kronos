@@ -1,89 +1,32 @@
 # 工作摘要
 
-**时间:** 2026-05-05 09:35:17
+**时间:** 2026-05-18 15:30
 
-## 变更概要
-```
- .gitignore                                   |    3 +
- docs/codebase/ARCHITECTURE.md                |   79 ++
- docs/codebase/CONCERNS.md                    |   68 ++
- docs/codebase/CONVENTIONS.md                 |   50 ++
- docs/codebase/INTEGRATIONS.md                |   48 ++
- docs/codebase/STACK.md                       |   74 ++
- docs/codebase/STRUCTURE.md                   |   55 ++
- docs/codebase/TESTING.md                     |   60 ++
- docs/codebase/WORKFLOWS.md                   |  214 ++++++
- requirements.txt                             |    2 +-
- summary.md                                   |  183 +----
- tdxdata/.gitignore                           |   14 +
- tdxdata/.trae/rules/project_rules.md         |   59 ++
- tdxdata/README.md                            |  367 ++++++++++
- tdxdata/docs/PRD.md                          |  209 ++++++
- tdxdata/docs/api_reference.md                | 1007 ++++++++++++++++++++++++++
- tdxdata/docs/dataspec.txt                    |  264 +++++++
- tdxdata/docs/tdxdata.txt                     |  245 +++++++
- tdxdata/plans/tdx-data-reader.md             |  415 +++++++++++
- tdxdata/pyproject.toml                       |   31 +
- tdxdata/tdxdata/__init__.py                  |    4 +
- tdxdata/tdxdata/api.py                       |  206 ++++++
- tdxdata/tdxdata/core/__init__.py             |   11 +
- tdxdata/tdxdata/core/connection.py           |   58 ++
- tdxdata/tdxdata/core/data_manager.py         |   79 ++
- tdxdata/tdxdata/core/plugin_manager.py       |   92 +++
- tdxdata/tdxdata/core/registry.py             |   70 ++
- tdxdata/tdxdata/errors/__init__.py           |   19 +
- tdxdata/tdxdata/errors/circuit_breaker.py    |   82 +++
- tdxdata/tdxdata/errors/exceptions.py         |   26 +
- tdxdata/tdxdata/errors/resource.py           |   20 +
- tdxdata/tdxdata/errors/retry.py              |   48 ++
- tdxdata/tdxdata/logging/__init__.py          |    3 +
- tdxdata/tdxdata/logging/logger.py            |   16 +
- tdxdata/tdxdata/qlib/__init__.py             |   19 +
- tdxdata/tdxdata/qlib/converter.py            |  104 +++
- tdxdata/tdxdata/qlib/qlib_bin.py             |  117 +++
- tdxdata/tdxdata/sources/__init__.py          |   19 +
- tdxdata/tdxdata/sources/adjust.py            |   80 ++
- tdxdata/tdxdata/sources/base.py              |   21 +
- tdxdata/tdxdata/sources/daily_basic.py       |   36 +
- tdxdata/tdxdata/sources/f10.py               |   60 ++
- tdxdata/tdxdata/sources/financial.py         |   40 +
- tdxdata/tdxdata/sources/history_kline.py     |  108 +++
- tdxdata/tdxdata/sources/hybrid_kline.py      |  253 +++++++
- tdxdata/tdxdata/sources/local_kline.py       |  123 ++++
- tdxdata/tdxdata/sources/realtime_snapshot.py |   87 +++
- tdxdata/tdxdata/sources/tick.py              |   51 ++
- tdxdata/tdxdata/storage/__init__.py          |   13 +
- tdxdata/tdxdata/storage/base.py              |   17 +
- tdxdata/tdxdata/storage/csv.py               |   44 ++
- tdxdata/tdxdata/storage/dataframe.py         |   13 +
- tdxdata/tdxdata/storage/parquet.py           |   44 ++
- tdxdata/tdxdata/storage/qlib.py              |   75 ++
- tdxdata/tdxdata/storage/sqlite.py            |   48 ++
- tdxdata/tdxdata/sync/__init__.py             |    5 +
- tdxdata/tdxdata/sync/gap_detector.py         |   25 +
- tdxdata/tdxdata/sync/manager.py              |   29 +
- tdxdata/tdxdata/sync/state.py                |   60 ++
- tdxdata/tests/__init__.py                    |    0
- tdxdata/tests/conftest.py                    |   41 ++
- tdxdata/tests/test_circuit_breaker.py        |   67 ++
- tdxdata/tests/test_connection.py             |   92 +++
- tdxdata/tests/test_history_kline.py          |  151 ++++
- tdxdata/tests/test_hybrid_kline.py           |  221 ++++++
- tdxdata/tests/test_integration.py            |  219 ++++++
- tdxdata/tests/test_live.py                   |  653 +++++++++++++++++
- tdxdata/tests/test_live_local.py             |  175 +++++
- tdxdata/tests/test_local_kline.py            |  115 +++
- tdxdata/tests/test_qlib.py                   |  244 +++++++
- tdxdata/tests/test_registry.py               |   76 ++
- tdxdata/tests/test_retry.py                  |   51 ++
- tdxdata/tests/test_sources.py                |  216 ++++++
- tdxdata/tests/test_storage.py                |  110 +++
- tdxdata/tests/test_sync.py                   |  105 +++
- 75 files changed, 8031 insertions(+), 177 deletions(-)
-```
+## 本次变更
+
+### 纠偏逻辑集成到所有预测入口
+- 新建 `scripts/calibrate.py` 共享纠偏模块（从 predict.py 抽取，改为接受 predictor 对象）
+- `scripts/predict.py` — 模型加载优化为一次，使用共享校准模块
+- `scripts/predict_stocks.py` — hfq 空间校准后换算实际市价，报告中显示偏差信息
+- `webui/app.py` — /api/predict 端点数据充足时自动校准
+- `examples/prediction_cn_markets_day.py` — 预测→涨跌停→校准→重新涨跌停
+
+### 合并 predict_sse.py → predict_stocks.py
+- 删除 `scripts/predict_sse.py`（129 行）
+- `scripts/predict_stocks.py` 新增 `--format console` 参数（控制台表格输出）
+- 报告文件路径规范为 `output/kronos_{symbols}.md`
+
+### 文件变更
+- 新增: `scripts/calibrate.py`
+- 修改: `scripts/predict.py`, `scripts/predict_stocks.py`, `webui/app.py`, `examples/prediction_cn_markets_day.py`
+- 删除: `scripts/predict_sse.py`
+- 更新: `README.md`, `.claude/skills/finetune-kronos/SKILL.md`
 
 ## 最近提交
 ```
-2c6d22b Add TDX local data fine-tuning pipeline for Kronos
-67b630e Merge pull request #243 from ElhamDevelopmentStudio/fix/batch-dimension-training
+3c2d9f5 feat: 预测脚本自动检查数据新鲜度，过期则从TDX导入最新行情
+7fd826e feat: 新增回测校准功能，预测自动修正系统性偏差
+584c13a feat: 新增一键预测脚本、README用法说明、数据修复重训
+f8fc069 chore: 排除数据文件和模型文件，更新 .gitignore
+a46b647 feat: 依赖升级、后复权修复与TDX数据微调完成
 ```

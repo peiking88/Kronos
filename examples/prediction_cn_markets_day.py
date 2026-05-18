@@ -30,6 +30,7 @@ import matplotlib.pyplot as plt
 import sys
 sys.path.append("../")
 from model import Kronos, KronosTokenizer, KronosPredictor
+from scripts.calibrate import backtest_calibrate
 
 save_dir = "./outputs"
 os.makedirs(save_dir, exist_ok=True)
@@ -182,6 +183,21 @@ def predict_future(symbol):
     # Apply ±10% price limit
     last_close = df["close"].iloc[-1]
     pred_df = apply_price_limits(pred_df, last_close, limit_rate=0.1)
+
+    # 回测校准
+    cal_df = df[["open", "high", "low", "close", "volume", "amount"]].copy()
+    cal_df.index = pd.to_datetime(df["date"])
+    bias_correction = backtest_calibrate(
+        predictor, cal_df, PRED_LEN,
+        lookback=LOOKBACK, temperature=T, top_p=TOP_P,
+        sample_count=SAMPLE_COUNT,
+    )
+    if abs(bias_correction) > 0.01:
+        print(f"  偏差校正值: {bias_correction:+.2f}")
+        for col in ["open", "high", "low", "close"]:
+            pred_df[col] = pred_df[col] + bias_correction
+        # 校正后重新约束涨跌停
+        pred_df = apply_price_limits(pred_df, last_close, limit_rate=0.1)
 
     # Merge historical and predicted data
     df_out = pd.concat([

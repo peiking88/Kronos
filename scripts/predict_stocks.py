@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-一键预测脚本 — 使用微调模型预测个股未来10日收盘价，输出md报告。
+一键预测脚本 — 使用微调模型预测个股/指数未来10日走势。
 
 用法:
-    python scripts/predict_stocks.py sh600000 sz002741              # 预测2只
-    python scripts/predict_stocks.py sz300450 sh600353 sz002741     # 预测3只
-    python scripts/predict_stocks.py --help
+    python scripts/predict_stocks.py sh600000 sz002741              # 预测个股，输出 MD 报告
+    python scripts/predict_stocks.py sh000001 --format console      # 预测上证指数，控制台表格
+    python scripts/predict_stocks.py sz300450 sh600353 --format md  # 预测多只，输出报告
 
-价格已换算为实际市场价（不复权）。
+个股价格已换算为实际市场价（不复权）。指数为实际点位。
 """
 
 import argparse, os, sys, pickle, json
@@ -20,6 +20,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from model.kronos import KronosTokenizer, Kronos, KronosPredictor
+from scripts.calibrate import backtest_calibrate
 
 # ---------------------------------------------------------------------------
 STOCK_NAMES = {
@@ -137,7 +138,7 @@ def ensure_fresh_data(codes):
     return result
 
 
-def run_prediction(predictor, df, factor):
+def run_prediction(predictor, df, factor, bias_correction=0.0):
     """Forward predict next PRED_LEN days. Returns list of dicts."""
     df = df.rename(columns={"vol": "volume", "amt": "amount"})
     context = df.iloc[-LOOKBACK:]
@@ -156,6 +157,11 @@ def run_prediction(predictor, df, factor):
         pred_len=PRED_LEN, T=T, top_p=TOP_P,
         sample_count=SAMPLE_COUNT, verbose=False
     )
+
+    # 偏差校正（hfq 空间）
+    if abs(bias_correction) > 0.01:
+        for col in ["open", "high", "low", "close"]:
+            pred[col] = pred[col] + bias_correction
 
     rows = []
     for i, (ts, row) in enumerate(pred.iterrows()):
@@ -253,11 +259,72 @@ def format_table(rows):
     return "\n".join(lines)
 
 
+def console_output(all_forward, all_bt, all_conf, all_codes, errors):
+    """控制台格式输出：预测表格 + 涨跌统计 + 回测摘要。"""
+    for code in all_codes:
+        if code not in all_forward:
+            continue
+        info = all_forward[code]
+        rows = info["rows"]
+        base = info["base"]
+        bc = info.get("bias_correction", 0.0)
+        pred_len = len(rows)
+
+        print(f"\n{'='*70}")
+        print(f"  {info['name']} ({code}) 走势预测")
+        print(f"{'='*70}")
+        print(f"  基准收盘价: {base:.2f}")
+        if abs(bc) > 0.01:
+            print(f"  偏差校正: {bc:+.2f} (基于最近 60 天回测)")
+        print(f"{'='*70}")
+        print(f"  {'日期':<14s} {'开盘':>8s} {'最高':>8s} {'最低':>8s} {'收盘':>8s} {'涨跌幅':>8s}")
+        print(f"  {'-'*54}")
+
+        for i, r in enumerate(rows):
+            prev = base if i == 0 else rows[i-1]["close"]
+            daily_chg = (r["close"] - prev) / prev * 100
+            print(f"  {str(r['date']):<14s} "
+                  f"{r['open']:>8.2f} {r['high']:>8.2f} "
+                  f"{r['low']:>8.2f} {r['close']:>8.2f} {daily_chg:>+7.2f}%")
+
+        final = rows[-1]
+        total_chg = (final["close"] - base) / base * 100
+        print(f"  {'-'*54}")
+        print(f"  {pred_len}日预测涨跌幅: {total_chg:+.2f}%")
+        print(f"  预测终点: {final['close']:.2f} (起始: {base:.2f})")
+        print(f"{'='*70}")
+
+        # 涨跌统计
+        up_days = sum(1 for i in range(1, len(rows)) if rows[i]["close"] > rows[i-1]["close"])
+        down_days = pred_len - 1 - up_days
+        prices = [r["close"] for r in rows]
+        pred_high = max(r["high"] for r in rows)
+        pred_low = min(r["low"] for r in rows)
+        print(f"\n  涨跌统计: {up_days}涨 / {down_days}跌")
+        print(f"  预测区间: {pred_low:.2f} ~ {pred_high:.2f}")
+        print(f"  波动幅度: {(pred_high - pred_low) / base * 100:.2f}%")
+
+        # 回测指标摘要
+        if code in all_bt and all_bt[code]["metrics"]:
+            m = all_bt[code]["metrics"]
+            if 5 in m:
+                print(f"  回测 D5 MAPE: {m[5]['mape']:.1%}  方向准确率: {m[5]['dir']:.0%}")
+            if 10 in m:
+                print(f"  回测 D10 MAPE: {m[10]['mape']:.1%}  方向准确率: {m[10]['dir']:.0%}")
+
+    if errors:
+        print(f"\n错误:")
+        for e in errors:
+            print(f"  - {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="一键预测个股未来10日收盘价")
     parser.add_argument("codes", nargs="+", help="股票代码，空格分割，如 sh600000 sz002741")
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("-o", "--output", default=None, help="输出md文件路径（默认自动生成）")
+    parser.add_argument("-o", "--output", default=None, help="输出文件路径（默认自动生成）")
+    parser.add_argument("--format", choices=["md", "console"], default="md",
+                        help="输出格式: md=Markdown报告, console=控制台表格 (默认 md)")
     parser.add_argument("--no-import", action="store_true", help="跳过自动导入，使用现有数据")
     args = parser.parse_args()
 
@@ -285,16 +352,30 @@ def main():
         factor = load_factor(code)
         name = STOCK_NAMES.get(code, code)
 
+        # 回测校准（hfq 空间）
+        df_for_cal = df.rename(columns={"vol": "volume", "amt": "amount"})
+        bias_correction = backtest_calibrate(
+            predictor, df_for_cal, PRED_LEN,
+            lookback=LOOKBACK, temperature=T, top_p=TOP_P,
+            sample_count=SAMPLE_COUNT,
+        )
+
         # Forward
-        rows, last_close_actual = run_prediction(predictor, df, factor)
-        all_forward[code] = {"name": name, "rows": rows, "base": last_close_actual, "factor": factor}
+        rows, last_close_actual = run_prediction(predictor, df, factor, bias_correction)
+        all_forward[code] = {"name": name, "rows": rows, "base": last_close_actual,
+                             "factor": factor, "bias_correction": bias_correction}
 
         # Backtest
         metrics, n_win, conf = run_backtest(predictor, df, factor)
         all_bt[code] = {"name": name, "metrics": metrics, "windows": n_win}
         all_conf[code] = {"name": name, "conf": conf, "base": last_close_actual}
 
-    # --- Generate report ---
+    # --- Output ---
+    if args.format == "console":
+        console_output(all_forward, all_bt, all_conf, args.codes, errors)
+        return
+
+    # --- Generate markdown report ---
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = []
     lines.append(f"# 个股未来10日收盘价预测报告")
@@ -316,6 +397,10 @@ def main():
         lines.append(f"### {info['name']} ({code})")
         lines.append(f"")
         lines.append(f"基准收盘: **{info['base']:.2f}**")
+        bc = info.get("bias_correction", 0.0)
+        if abs(bc) > 0.01:
+            lines.append(f"")
+            lines.append(f"偏差校正: **{bc:+.2f}** (基于最近 60 天回测)")
         lines.append(f"")
         lines.append(format_table(info["rows"]))
         lines.append("")
@@ -386,7 +471,7 @@ def main():
         out_path = args.output
     else:
         codes_str = "_".join(args.codes[:3])
-        out_path = f"outputs/pred_{codes_str}_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
+        out_path = f"output/kronos_{codes_str}.md"
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w") as f:

@@ -17,9 +17,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from model import Kronos, KronosTokenizer, KronosPredictor
+    from scripts.calibrate import backtest_calibrate
     MODEL_AVAILABLE = True
 except ImportError:
     MODEL_AVAILABLE = False
+    backtest_calibrate = None
     print("Warning: Kronos model cannot be imported, will use simulated data for demonstration")
 
 app = Flask(__name__)
@@ -507,7 +509,26 @@ def predict():
                     top_p=top_p,
                     sample_count=sample_count
                 )
-                
+
+                # 回测校准
+                bias_correction = 0.0
+                if backtest_calibrate is not None and len(df) >= lookback + 60:
+                    cal_needed = {'open', 'high', 'low', 'close', 'volume', 'amount'}
+                    if cal_needed.issubset(df.columns):
+                        try:
+                            cal_df = df[list(cal_needed)].copy()
+                            cal_df.index = pd.to_datetime(df['timestamps'])
+                            bias_correction = backtest_calibrate(
+                                predictor, cal_df, pred_len,
+                                lookback=lookback, temperature=temperature,
+                                top_p=top_p, sample_count=sample_count,
+                            )
+                            if abs(bias_correction) > 0.01:
+                                for col in ["open", "high", "low", "close"]:
+                                    pred_df[col] = pred_df[col] + bias_correction
+                        except Exception:
+                            pass
+
             except Exception as e:
                 return jsonify({'error': f'Kronos model prediction failed: {str(e)}'}), 500
         else:

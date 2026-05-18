@@ -322,7 +322,7 @@ python finetune/train_predictor_tdx.py \
   --epochs 30
 
 # Step 4: Verify with SSE Index prediction
-python scripts/predict_sse.py
+python scripts/predict_stocks.py sh000001 --format console
 ```
 
 ### What's Included
@@ -333,7 +333,7 @@ python scripts/predict_sse.py
 | `finetune/config_tdx.py` | Single-GPU config (后复权, RTX 4060 8GB tuned) |
 | `finetune/train_tokenizer_tdx.py` | Tokenizer single-GPU training script |
 | `finetune/train_predictor_tdx.py` | Predictor single-GPU training script (AMP fp16) |
-| `scripts/predict_sse.py` | Prediction demo on SSE Composite Index |
+| `scripts/predict_stocks.py` | Stock/index prediction with MD report or console output |
 | `summary.md` | Full workflow summary and results |
 
 ### Hardware Requirements
@@ -507,4 +507,23 @@ This project is licensed under the [MIT License](./LICENSE).
  README.md                 | 142 ++++++++++++++++---
  scripts/predict_stocks.py | 338 ++++++++++++++++++++++++++++++++++++++++++++++
  2 files changed, 461 insertions(+), 19 deletions(-)
+```
+
+### 2026-05-17 09:37:31
+```
+ .claude/skills/finetune-kronos/SKILL.md            |  19 +-
+ .../finetune-kronos/evals/trigger_evals.json       |  48 +++---
+ README.md                                          |   7 +
+ finetune/config_tdx.py                             |  22 +--
+ finetune/train_predictor_tdx.py                    |  13 +-
+ finetune/train_tokenizer_tdx.py                    |  15 +-
+ scripts/predict.py                                 |  63 ++++++-
+ scripts/tdx_import.py                              |  14 +-
+ tdxdata/pyproject.toml                             |   5 +-
+ tdxdata/tdxdata/__init__.py                        |   5 +-
+ tdxdata/tdxdata/api.py                             |  73 +++++---
+ tdxdata/tdxdata/core/__init__.py                   |   3 +-
+ tdxdata/tdxdata/core/connection.py                 |  60 ++++++-
+ tdxdata/tdxdata/core/data_manager.py               |  89 ++++++++--
+ tdxdata/tdxdata/core/registry.py                   |   3 -
 ```

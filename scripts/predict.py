@@ -28,6 +28,7 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from model import Kronos, KronosTokenizer, KronosPredictor
+from scripts.calibrate import backtest_calibrate
 
 # ── 常量 ──────────────────────────────────────────────
 TDX_DEFAULT = os.path.expanduser("~/.local/share/tdxcfv/drive_c/tc/")
@@ -87,16 +88,8 @@ def apply_price_limits(pred_df: pd.DataFrame, last_close: float, limit_rate: flo
         lc = pred_df.iat[i, pred_df.columns.get_loc("close")]
 
 
-def run_predict(df, pred_len, model_name, device, temperature, top_p, sample_count):
-    """加载模型并预测。"""
-    model_id = MODEL_MAP[model_name]
-    print(f"加载 tokenizer: {TOKENIZER_ID}")
-    print(f"加载模型: {model_id} (device={device})")
-    tokenizer = KronosTokenizer.from_pretrained(TOKENIZER_ID)
-    model = Kronos.from_pretrained(model_id)
-    model.eval()
-    predictor = KronosPredictor(model, tokenizer, device=device, max_context=512)
-
+def run_predict(predictor, df, pred_len, temperature, top_p, sample_count):
+    """使用已加载的 predictor 预测。"""
     x_df = df.iloc[-LOOKBACK:][["open", "high", "low", "close", "volume", "amount"]].reset_index(drop=True)
     x_timestamp = pd.Series(df.iloc[-LOOKBACK:].index.to_list())
     last_date = df.index[-1]
@@ -151,45 +144,6 @@ def plot_result(hist_df, pred_df, tdx_key, out_html):
     fig.write_html(out_html)
 
 
-def backtest_calibrate(df, pred_len, model_name, device, temperature, top_p, sample_count):
-    """回测校准：用最近 BACKTEST_DAYS 天做回测，计算系统性偏差 ME。
-    返回 bias_correction（正值表示需要上调预测）。
-    """
-    if len(df) < BACKTEST_CTX + BACKTEST_DAYS:
-        print(f"  数据不足回测校准 (需 >= {BACKTEST_CTX + BACKTEST_DAYS}，实际 {len(df)})，跳过")
-        return 0.0
-
-    # 回测区间
-    backtest_df = df.iloc[-(BACKTEST_CTX + BACKTEST_DAYS):]
-    ctx_df = backtest_df.iloc[:BACKTEST_CTX]
-    actual_df = backtest_df.iloc[BACKTEST_CTX:]
-
-    ctx_ts = pd.Series(ctx_df.index.to_list())
-    actual_ts = pd.Series(actual_df.index.to_list())
-
-    print(f"  回测校准: 上下文 {ctx_df.index[0].date()}~{ctx_df.index[-1].date()} "
-          f"→ 预测 {actual_df.index[0].date()}~{actual_df.index[-1].date()}")
-
-    try:
-        bt_pred = run_predict(
-            ctx_df, BACKTEST_DAYS, model_name, device,
-            temperature, top_p, sample_count,
-        )
-    except Exception as e:
-        print(f"  回测预测失败: {e}，跳过校准")
-        return 0.0
-
-    actual_close = actual_df["close"].values
-    pred_close = bt_pred["close"].values
-    me = np.mean(pred_close - actual_close)
-    mae = np.mean(np.abs(pred_close - actual_close))
-    mape = np.mean(np.abs(pred_close - actual_close) / actual_close * 100)
-
-    print(f"  回测结果: ME={me:+.2f}, MAE={mae:.2f}, MAPE={mape:.2f}%")
-    print(f"  偏差校正值: {-me:+.2f}")
-    return -me  # 取反，校正值
-
-
 # ── 主流程 ────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
@@ -227,6 +181,16 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     today_str = end_date.replace("-", "")
 
+    # 加载模型（一次）
+    model_id = MODEL_MAP[args.model]
+    print(f"加载 tokenizer: {TOKENIZER_ID}")
+    print(f"加载模型: {model_id} (device={args.device})")
+    tokenizer = KronosTokenizer.from_pretrained(TOKENIZER_ID)
+    model = Kronos.from_pretrained(model_id)
+    model.eval()
+    predictor = KronosPredictor(model, tokenizer, device=args.device, max_context=512)
+    print()
+
     for raw_sym in args.symbols:
         market, code, tdx_key = normalize_symbol(raw_sym)
         print(f"{'='*60}")
@@ -250,7 +214,7 @@ def main():
         # 2. 预测
         try:
             pred_df = run_predict(
-                df, args.pred_len, args.model, args.device,
+                predictor, df, args.pred_len,
                 args.temperature, args.top_p, args.samples,
             )
         except Exception as e:
@@ -265,8 +229,9 @@ def main():
         bias_correction = 0.0
         if not args.no_limit:  # 仅在启用涨跌停约束时做校准（正常预测场景）
             bias_correction = backtest_calibrate(
-                df, args.pred_len, args.model, args.device,
-                args.temperature, args.top_p, args.samples,
+                predictor, df, args.pred_len,
+                temperature=args.temperature, top_p=args.top_p,
+                sample_count=args.samples,
             )
             if abs(bias_correction) > 0.01:
                 # 应用校正

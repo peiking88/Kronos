@@ -195,7 +195,7 @@ ls -lh outputs/tdx_finetune/tdx_predictor/checkpoints/best_model/model.safetenso
 
 ### Step 4: 预测验证
 
-使用 `scripts/predict_sse.py` 验证模型预测能力：
+使用 `scripts/predict_stocks.py` 验证模型预测能力：
 
 ```bash
 # 导入上证指数（不复权 — 指数不需要复权）
@@ -206,8 +206,8 @@ ls -lh outputs/tdx_finetune/tdx_predictor/checkpoints/best_model/model.safetenso
   --output-dir ./data/tdx_import_sse \
   --no-split --no-continuity
 
-# 运行预测
-.venv/bin/python scripts/predict_sse.py
+# 运行预测（控制台格式）
+.venv/bin/python scripts/predict_stocks.py sh000001 --format console
 ```
 
 预测脚本输出未来 20 个交易日的 OHLCV 点估计及涨跌幅统计。
@@ -225,7 +225,7 @@ ls -lh outputs/tdx_finetune/tdx_predictor/checkpoints/best_model/model.safetenso
 - `finetune/train_tokenizer_tdx.py` — Tokenizer 单卡训练脚本
 - `finetune/train_predictor_tdx.py` — Predictor 单卡训练脚本（AMP fp16 + 梯度累积）
 - `finetune/dataset.py` — 数据集加载器（修改后支持自定义 config）
-- `scripts/predict_sse.py` — 上证指数预测演示
+- `scripts/predict_stocks.py` — 个股/指数预测（支持 --format console/md）
 - `.venv/bin/activate` — venv 激活脚本（末尾含 `HF_ENDPOINT` 国内镜像配置）
 - `tdxdata/pyproject.toml` — tdxdata 包配置（需 `pip install -e` 安装）
 - `requirements.txt` — Python 核心依赖（不含 pytest、tdxdata）
