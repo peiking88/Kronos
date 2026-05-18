@@ -23,7 +23,7 @@ from model.kronos import KronosTokenizer, Kronos, KronosPredictor
 
 # ---------------------------------------------------------------------------
 STOCK_NAMES = {
-    "sh000001": "上证指数", "sz399006": "创业板指", "sz399001": "深证成指",
+    "sh999999": "上证指数", "sz399006": "创业板指", "sz399001": "深证成指",
     "sh600353": "旭光电子", "sz002741": "光华科技", "sz300450": "先导智能",
 }
 FACTOR_DIR = os.path.expanduser("~/.local/share/tdxcfv/drive_c/tc/.factor_cache")
@@ -38,6 +38,8 @@ TOP_P = 0.9
 SAMPLE_COUNT = 5
 BACKTEST_SAMPLE_COUNT = 3
 BACKTEST_WINDOWS = 30
+TDX_DIR = os.path.expanduser("~/.local/share/tdxcfv/drive_c/tc/")
+MAX_STALE_DAYS = 5
 
 
 def load_factor(code):
@@ -79,6 +81,60 @@ def load_model(device):
         os.path.join(MODEL_DIR, "tdx_predictor", "checkpoints", "best_model")
     ).to(device)
     return KronosPredictor(mod, tok, device=device, max_context=512)
+
+
+def ensure_fresh_data(codes):
+    """检查数据新鲜度，过期则从TDX本地文件导入最新数据并合并。
+
+    返回 {code: merged_df}（仅包含需要刷新的股票）。
+    """
+    stale_codes = []
+    existing_data = {}
+    for code in codes:
+        # 指数代码走 SSE_DATA 路径，不通过 TDX 导入
+        if code.startswith("sh000") or code.startswith("sz399"):
+            continue
+        df = get_data(code)
+        if df is None or len(df) == 0:
+            stale_codes.append(code)
+            continue
+        latest = df.index.max().date()
+        if (datetime.now().date() - latest).days > MAX_STALE_DAYS:
+            stale_codes.append(code)
+            existing_data[code] = df
+
+    if not stale_codes:
+        print("数据均为最新，无需导入。")
+        return {}
+
+    print(f"以下 {len(stale_codes)} 只股票数据需要更新: {stale_codes}")
+    print("正在从本地TDX数据导入...")
+
+    try:
+        from scripts.tdx_import import TdxDataImporter
+        importer = TdxDataImporter(tdxdir=TDX_DIR, dividend_type="back")
+        fresh_dataset = importer.build_dataset(
+            stale_codes, period="1d", check_continuity=False,
+        )
+    except Exception as e:
+        print(f"导入失败: {e}，将使用现有数据。")
+        return {}
+
+    result = {}
+    for code in stale_codes:
+        if code not in fresh_dataset:
+            print(f"  {code}: TDX中无数据，跳过")
+            continue
+        fresh_df = fresh_dataset[code]
+        if code in existing_data:
+            merged = pd.concat([existing_data[code], fresh_df])
+            merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+            result[code] = merged
+        else:
+            result[code] = fresh_df
+        print(f"  {code}: 数据已更新至 {result[code].index.max().strftime('%Y-%m-%d')}")
+
+    return result
 
 
 def run_prediction(predictor, df, factor):
@@ -202,10 +258,15 @@ def main():
     parser.add_argument("codes", nargs="+", help="股票代码，空格分割，如 sh600000 sz002741")
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument("-o", "--output", default=None, help="输出md文件路径（默认自动生成）")
+    parser.add_argument("--no-import", action="store_true", help="跳过自动导入，使用现有数据")
     args = parser.parse_args()
 
     device = torch.device(args.device)
     print(f"Device: {device}")
+
+    # 检查并导入最新数据
+    fresh_cache = {} if args.no_import else ensure_fresh_data(args.codes)
+
     print(f"Loading fine-tuned model...")
     predictor = load_model(device)
 
@@ -216,7 +277,7 @@ def main():
 
     for code in args.codes:
         print(f"\nProcessing {code}...")
-        df = get_data(code)
+        df = fresh_cache.get(code) or get_data(code)
         if df is None:
             errors.append(f"{code}: 数据未找到")
             continue
