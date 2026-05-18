@@ -23,12 +23,12 @@ cd Kronos
 
 2. 确保 `finetune/` 目录下存在以下 TDX 适配脚本（随宿主项目分发，**不在本技能包内**）：
 
-| 文件 | 作用 |
-|------|------|
-| `finetune/config_tdx.py` | 单卡微调配置（后复权、TDX 时间范围、显存参数） |
-| `finetune/train_tokenizer_tdx.py` | Tokenizer 单卡训练 |
-| `finetune/train_predictor_tdx.py` | Predictor 单卡训练（AMP fp16 + 梯度累积） |
-| `finetune/dataset.py` | 数据集加载器（支持自定义 config） |
+| 文件                              | 作用                                           |
+| --------------------------------- | ---------------------------------------------- |
+| `finetune/config_tdx.py`          | 单卡微调配置（后复权、TDX 时间范围、显存参数） |
+| `finetune/train_tokenizer_tdx.py` | Tokenizer 单卡训练                             |
+| `finetune/train_predictor_tdx.py` | Predictor 单卡训练（AMP fp16 + 梯度累积）      |
+| `finetune/dataset.py`             | 数据集加载器（支持自定义 config）              |
 
 如果宿主项目缺少上述 `*_tdx.py`，本技能描述的 Step 3 训练步骤无法执行——需要先补齐这些脚本，或回退到上游 `finetune/train_tokenizer.py` 配 Qlib 数据走原始流程。
 
@@ -36,15 +36,15 @@ cd Kronos
 
 确认以下环境就绪后再开始：
 
-| 条件 | 检查命令 | 要求 |
-|------|----------|------|
-| GPU | `nvidia-smi` | >= 8GB VRAM（如 RTX 4060） |
-| PyTorch CUDA | `python -c "import torch; print(torch.cuda.is_available())"` | True |
-| TDX 数据目录 | `ls ~/.local/share/tdxcfv/drive_c/tc/vipdoc/sh/lday/` | 存在 `.day` 文件 |
-| 磁盘空间 | `df -h .` | >= 2GB（160MB 数据 + 425MB 模型 + 410MB 输出） |
-| HF 镜像 | `curl -s --connect-timeout 5 https://hf-mirror.com` | 可访问 |
-| tdxdata 包 | `python -c "import tdxdata"` | 已安装 |
-| pytest | `python -m pytest --version` | 已安装 |
+| 条件         | 检查命令                                                     | 要求                                           |
+| ------------ | ------------------------------------------------------------ | ---------------------------------------------- |
+| GPU          | `nvidia-smi`                                                 | >= 8GB VRAM（如 RTX 4060）                     |
+| PyTorch CUDA | `python -c "import torch; print(torch.cuda.is_available())"` | True                                           |
+| TDX 数据目录 | `ls ~/.local/share/tdxcfv/drive_c/tc/vipdoc/sh/lday/`        | 存在 `.day` 文件                               |
+| 磁盘空间     | `df -h .`                                                    | >= 2GB（160MB 数据 + 425MB 模型 + 410MB 输出） |
+| HF 镜像      | `curl -s --connect-timeout 5 https://hf-mirror.com`          | 可访问                                         |
+| tdxdata 包   | `python -c "import tdxdata"`                                 | 已安装                                         |
+| pytest       | `python -m pytest --version`                                 | 已安装                                         |
 
 TDX 数据目录默认路径：`~/.local/share/tdxcfv/drive_c/tc/`（wine 安装）。若路径不同，通过 `--tdxdir` 参数指定。
 
@@ -61,10 +61,11 @@ echo 'export HF_ENDPOINT=https://hf-mirror.com' >> .venv/bin/activate
 source .venv/bin/activate
 pip install -r requirements.txt
 pip install pytest pytest-timeout
-pip install -e tdxdata/
+pip install -e /home/li/peiking88/tdxdata
 ```
 
 **关键说明**：
+
 - `HF_ENDPOINT` 必须写入 `activate` 脚本末尾，确保每次激活自动生效。所有 HuggingFace 模型下载均走国内镜像。
 - `tdxdata` 必须以 editable 模式安装，否则项目中 `from tdxdata import ...` 会失败。
 - `pytest` 不在 `requirements.txt` 中，需单独安装。
@@ -95,7 +96,9 @@ TDX 本地数据每天都在长，**不要把下面示例日期当永恒事实**
 - **val**: `[END - 6 月, END - 3 月)` ← 与 test 不重叠
 - **train**: `[数据起始（约 2024-06）, END - 6 月)` ← 与 val 不重叠
 
-三段**严禁重叠**——重叠会让 val/test 指标偏低、丧失泛化判断意义；`lookback_window=90` 所需的历史会自动从更早的数据里取，不要靠"区间重叠"凑。
+三段的**预测目标区间**严禁重叠——重叠会让 val/test 指标偏低、丧失泛化判断意义。
+
+`lookback_window=90 + predict_window=10` 所需的前置历史由 `tdx_import.py` 自动处理：val/test 的 pkl 会前移起始日期约 165 个日历日（覆盖 ~110 个交易日），从更早数据中借用 lookback，无需手动调整日期范围。
 
 下面命令以 **2026-05-07 为当前日**给出示例日期，照抄前请按上面原则改：
 
@@ -118,14 +121,38 @@ TDX 本地数据每天都在长，**不要把下面示例日期当永恒事实**
 
 **首次运行**: 需从新浪获取 ~5000 只股票的复权因子，约 25-30 分钟。因子缓存在 TDX 目录旁的 `.factor_cache/` 中，后续导入秒级完成。
 
-**验证**: 检查输出文件存在且非空：
+**验证**: 检查输出文件存在且非空，并验证复权因子一致性：
+
 ```bash
 ls -lh data/tdx_import/1d/train_data.pkl  # ~100MB
 ls -lh data/tdx_import/1d/val_data.pkl    # ~35MB
 ls -lh data/tdx_import/1d/test_data.pkl   # ~25MB
 ```
 
+**因子一致性检查**（强烈建议）:
+
+```bash
+# 检查 pkl 中的 hfq 价格是否与 factor cache 匹配
+# 偏差 >5% 说明 pkl 数据需要重新生成
+.venv/bin/python -c "
+import pickle, pandas as pd
+from mootdx.reader import Reader
+reader = Reader.factory(market='std', tdxdir='~/.local/share/tdxcfv/drive_c/tc/')
+raw = reader.daily(symbol='600353')
+with open('data/tdx_import/1d/test_data.pkl','rb') as f:
+    d = pickle.load(f)
+if 'sh600353' in d:
+    hfq = d['sh600353'].iloc[-1]['close']
+    rc = float(raw.iloc[-1]['close'])
+    print(f'hfq/raw = {hfq/rc:.4f}')
+    fc = pd.read_pickle('/home/li/.local/share/tdxcfv/drive_c/tc/.factor_cache/sh600353.pkl')
+    print(f'cache   = {fc.iloc[-1][\"factor\"]:.4f}')
+    ratio = (hfq/rc) / fc.iloc[-1]['factor']
+    print(f'一致性: {\"✓\" if abs(ratio-1)<0.05 else \"✗ 偏差\"+str(round((ratio-1)*100,1))+\"%\"}')"
+```
+
 **故障处理**:
+
 - 部分股票复权因子获取失败 → 自动降级为不复权，不影响流程
 - 股票数量显著少于 4900 → 检查 TDX 数据目录是否包含沪深两市数据
 - 磁盘不足 → 可通过 `--limit N` 先导入少量股票测试
@@ -148,6 +175,7 @@ for model_id in ['NeoQuasar/Kronos-Tokenizer-base', 'NeoQuasar/Kronos-base']:
 模型大小：Tokenizer 15.8MB + Kronos-base 409MB，下载耗时约 5-10 秒（国内镜像）。
 
 **故障处理**:
+
 - `from_pretrained` 报 `missing N required positional arguments` → 本质是 `HF_ENDPOINT` 未生效，`config.json` 下载失败。检查 `echo $HF_ENDPOINT` 是否输出 `https://hf-mirror.com`，详见 [环境重建](#环境重建--项目迁移)
 - `hf-mirror.com` 不可用 → 尝试 `https://huggingface.co`（直连可能较慢）
 - 无网络 → 从其他有网络环境拷贝 `~/.cache/huggingface/hub/` 目录
@@ -174,6 +202,7 @@ for model_id in ['NeoQuasar/Kronos-Tokenizer-base', 'NeoQuasar/Kronos-base']:
 ```
 
 **验证**: 检查模型输出文件：
+
 ```bash
 ls -lh outputs/tdx_finetune/tdx_tokenizer/checkpoints/best_model/model.safetensors   # ~16MB
 ls -lh outputs/tdx_finetune/tdx_predictor/checkpoints/best_model/model.safetensors  # ~391MB
@@ -190,12 +219,13 @@ ls -lh outputs/tdx_finetune/tdx_predictor/checkpoints/best_model/model.safetenso
 ```
 
 **显存不足**: 若 OOM：
+
 - Tokenizer: 减小 `batch_size`（修改 `config_tdx.py`）
 - Predictor: 减小 `predictor_batch_size` 或增加 `predictor_accumulation`
 
 ### Step 4: 预测验证
 
-使用 `scripts/predict_stocks.py` 验证模型预测能力：
+使用 `scripts/predict_sse.py` 验证模型预测能力：
 
 ```bash
 # 导入上证指数（不复权 — 指数不需要复权）
@@ -206,13 +236,14 @@ ls -lh outputs/tdx_finetune/tdx_predictor/checkpoints/best_model/model.safetenso
   --output-dir ./data/tdx_import_sse \
   --no-split --no-continuity
 
-# 运行预测（控制台格式）
-.venv/bin/python scripts/predict_stocks.py sh000001 --format console
+# 运行预测
+.venv/bin/python scripts/predict_sse.py
 ```
 
 预测脚本输出未来 20 个交易日的 OHLCV 点估计及涨跌幅统计。
 
 **注意**:
+
 - 指数预测仅作模型能力验证，不构成投资建议
 - 交易日历未考虑 A 股节假日，生成的是自然周历
 - 微调模型在个股数据上训练，对指数的适用性有限
@@ -225,28 +256,28 @@ ls -lh outputs/tdx_finetune/tdx_predictor/checkpoints/best_model/model.safetenso
 - `finetune/train_tokenizer_tdx.py` — Tokenizer 单卡训练脚本
 - `finetune/train_predictor_tdx.py` — Predictor 单卡训练脚本（AMP fp16 + 梯度累积）
 - `finetune/dataset.py` — 数据集加载器（修改后支持自定义 config）
-- `scripts/predict_stocks.py` — 个股/指数预测（支持 --format console/md）
+- `scripts/predict_sse.py` — 上证指数预测演示
 - `.venv/bin/activate` — venv 激活脚本（末尾含 `HF_ENDPOINT` 国内镜像配置）
-- `tdxdata/pyproject.toml` — tdxdata 包配置（需 `pip install -e` 安装）
+- `/home/li/peiking88/tdxdata/pyproject.toml` — tdxdata 包配置（需 `pip install -e` 安装）
 - `requirements.txt` — Python 核心依赖（不含 pytest、tdxdata）
 
 ### `finetune/config_tdx.py` 关键字段速查
 
 复制改造时重点关注以下字段（完整字段以宿主项目源文件为准）：
 
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `lookback_window` | 90 | 模型可见的历史交易日数 |
-| `predict_window` | 10 | 训练时的预测窗口 |
-| `dividend_type` | "back" | 后复权（匹配上游 Qlib 训练约定） |
-| `batch_size` | 50 | Tokenizer 批大小（fp32） |
-| `predictor_batch_size` | 12 | Predictor 批大小（AMP fp16） |
-| `predictor_accumulation` | 4 | 梯度累积步数（有效 bs = 12×4 = 48） |
-| `tokenizer_learning_rate` | 2e-4 | Tokenizer 学习率 |
-| `predictor_learning_rate` | 4e-5 | Predictor 学习率 |
-| `epochs` | 30 | Tokenizer / Predictor 训练轮数 |
-| `seed` | 100 | 复现种子 |
-| `train_time_range` / `val_time_range` / `test_time_range` | 见 Step 1 | 三段切分日期 |
+| 字段                                                      | 默认      | 说明                                |
+| --------------------------------------------------------- | --------- | ----------------------------------- |
+| `lookback_window`                                         | 90        | 模型可见的历史交易日数              |
+| `predict_window`                                          | 10        | 训练时的预测窗口                    |
+| `dividend_type`                                           | "back"    | 后复权（匹配上游 Qlib 训练约定）    |
+| `batch_size`                                              | 50        | Tokenizer 批大小（fp32）            |
+| `predictor_batch_size`                                    | 12        | Predictor 批大小（AMP fp16）        |
+| `predictor_accumulation`                                  | 4         | 梯度累积步数（有效 bs = 12×4 = 48） |
+| `tokenizer_learning_rate`                                 | 2e-4      | Tokenizer 学习率                    |
+| `predictor_learning_rate`                                 | 4e-5      | Predictor 学习率                    |
+| `epochs`                                                  | 30        | Tokenizer / Predictor 训练轮数      |
+| `seed`                                                    | 100       | 复现种子                            |
+| `train_time_range` / `val_time_range` / `test_time_range` | 见 Step 1 | 三段切分日期                        |
 
 ## 环境重建 / 项目迁移
 
@@ -274,7 +305,7 @@ echo 'export HF_ENDPOINT=https://hf-mirror.com' >> .venv/bin/activate
 source .venv/bin/activate
 pip install -r requirements.txt
 pip install pytest pytest-timeout
-pip install -e tdxdata/
+pip install -e /home/li/peiking88/tdxdata
 ```
 
 ### 测试验证
@@ -293,34 +324,41 @@ python -m pytest tests/ -v             # 4 项回归测试，全部通过
 
 ### 常见陷阱
 
-| 现象 | 根因 | 修复 |
-|------|------|------|
+| 现象                                                           | 根因                                                          | 修复                                             |
+| -------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------ |
 | `from_pretrained` 报 `missing N required positional arguments` | `config.json` 下载失败，`model_kwargs` 为空。本质是 HF 不可达 | 确认 `HF_ENDPOINT` 已写入 activate 脚本并 source |
-| `ModuleNotFoundError: No module named 'tdxdata'` | tdxdata 未安装 | `pip install -e tdxdata/` |
-| `No module named pytest` | pytest 不在 requirements.txt | `pip install pytest pytest-timeout` |
-| 部分模型能加载、另一部分不行 | 能加载的模型已缓存，未缓存的模型因网络问题下载失败 | 同上 — 配置 HF 镜像后重新加载 |
+| `ModuleNotFoundError: No module named 'tdxdata'`               | tdxdata 未安装                                                | `pip install -e /home/li/peiking88/tdxdata`      |
+| `No module named pytest`                                       | pytest 不在 requirements.txt                                  | `pip install pytest pytest-timeout`              |
+| 部分模型能加载、另一部分不行                                   | 能加载的模型已缓存，未缓存的模型因网络问题下载失败            | 同上 — 配置 HF 镜像后重新加载                    |
 
 ## 技术细节
 
 ### 复权因子获取
 
 复权因子从新浪财经 HTTP API 获取：
+
 - URL: `https://finance.sina.com.cn/realstock/company/{market}{symbol}/{qfq|hfq}.js`
 - 仅日线数据做复权调整（分钟线不改动）
 - 仅调整 OHLC 四列，volume/amount 不变
 - 因子获取失败 → 自动降级为不复权
 - 因子缓存: `{tdxdir}/../.factor_cache/{code}.pkl`
 
+**⚠️ 因子缓存漂移风险**: `compute_factor_from_xdxr` 依赖 kline `pre_close` 计算累积因子，不同时间获取的 kline 可能不同，导致同一股票的因子值变化。训练数据 pkl 与预测时的 factor cache 可能不一致。防护措施：
+
+- 预测时使用 `derive_factor(code, df_hfq)` 从数据本身推导因子（`hfq_close / raw_close`），不依赖 cache
+- 每次数据导入后执行因子一致性检查（见 Step 1 验证步骤）
+- 因子严重不一致时需重新导入数据 + 重新微调
+
 ### 显存配置依据
 
 在 RTX 4060 Laptop 8GB 上实测：
 
-| 配置 | Tokenizer | Predictor |
-|------|-----------|-----------|
+| 配置       | Tokenizer | Predictor     |
+| ---------- | --------- | ------------- |
 | Batch size | 50 (fp32) | 12 (AMP fp16) |
-| 显存占用 | ~5.0 GB | ~6.3 GB |
-| 最大 bs | 64 | 16 (AMP) |
-| OOM | bs=100 | bs=20 (AMP) |
+| 显存占用   | ~5.0 GB   | ~6.3 GB       |
+| 最大 bs    | 64        | 16 (AMP)      |
+| OOM        | bs=100    | bs=20 (AMP)   |
 
 若使用其他 GPU，需要重新测显存并调整参数。
 
@@ -346,13 +384,14 @@ TDX 本地数据起始约为 2024-06，每日增长。切分务必**按当前数
 
 微调实战中积累的常见陷阱和最佳实践，详见 `references/lessons-learned.md`：
 
-| 条目 | 说明 |
-|---|---|
-| 后复权因子外推 | hfq 必须 `direction="backward"`，排查跳变方法 |
-| val/test lookback 补齐 | 从 train 末尾接 120 天，否则 val 集为空 |
-| 早停 | patience=5，节省 15-25% 训练时间 |
-| 报告价格规范 | 只显示实际市场价，不显示后复权价 |
-| 极端波动过滤 | 90 日回撤 >30% 或日波动 >8% 自动跳过 |
-| 模型偏置认知 | 均值回复 + 空头偏置，方向准确率 ~50% |
-| 依赖版本锁定 | mootdx≥2.0.3, opentdx≥0.5.10, tdxdata≥0.8.4 |
-| 一键预测 | `predict_stocks.py` 多股票预测 + md 报告 |
+| 条目                     | 说明                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------- |
+| 复权因子缓存漂移（高危） | cache 与训练数据 pkl 的 factor 不一致导致预测偏离 40%+，必须用 `derive_factor` 从数据推导 |
+| 后复权因子外推           | hfq 必须 `direction="backward"`，排查跳变方法                                             |
+| val/test lookback 补齐   | 从 train 末尾接 120 天，否则 val 集为空                                                   |
+| 早停                     | patience=5，节省 15-25% 训练时间                                                          |
+| 报告价格规范             | 只显示实际市场价，不显示后复权价                                                          |
+| 极端波动过滤             | 90 日回撤 >30% 或日波动 >8% 自动跳过                                                      |
+| 模型偏置认知             | 均值回复 + 空头偏置，方向准确率 ~50%                                                      |
+| 依赖版本锁定             | mootdx≥2.0.3, opentdx≥0.5.10, tdxdata≥0.8.4                                               |
+| 一键预测                 | `predict_stocks.py` 多股票预测 + md 报告                                                  |

@@ -44,21 +44,21 @@ cd /home/li/peiking88/Kronos
 
 ### 命令参考
 
-| 命令 | 说明 |
-|---|---|
-| `./start.sh` | 前台启动，日志直接输出到终端 |
-| `./start.sh -d` | 后台启动（守护进程模式），日志写入文件 |
-| `./start.sh stop` | 停止后台服务 |
-| `./start.sh status` | 查看运行状态、PID、最近日志 |
-| `./start.sh restart` | 重启服务（先 stop 再启动） |
+| 命令                 | 说明                                   |
+| -------------------- | -------------------------------------- |
+| `./start.sh`         | 前台启动，日志直接输出到终端           |
+| `./start.sh -d`      | 后台启动（守护进程模式），日志写入文件 |
+| `./start.sh stop`    | 停止后台服务                           |
+| `./start.sh status`  | 查看运行状态、PID、最近日志            |
+| `./start.sh restart` | 重启服务（先 stop 再启动）             |
 
 ### 选项参考
 
-| 选项 | 默认值 | 说明 |
-|---|---|---|
-| `-d` | 无 | 后台启动模式 |
-| `-p PORT` | 7070 | 指定端口号 |
-| `-h` | 无 | 显示帮助信息 |
+| 选项      | 默认值 | 说明         |
+| --------- | ------ | ------------ |
+| `-d`      | 无     | 后台启动模式 |
+| `-p PORT` | 7070   | 指定端口号   |
+| `-h`      | 无     | 显示帮助信息 |
 
 ### 使用示例
 
@@ -111,6 +111,7 @@ cd /home/li/peiking88/Kronos
 **Q: 启动报 "虚拟环境不存在"**
 
 项目根目录下需要 `.venv` 目录。创建方式：
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -120,6 +121,7 @@ pip install -r requirements.txt -r webui/requirements.txt
 **Q: 启动报 "端口 7070 已被占用"**
 
 用 `-p` 指定其他端口，或先停止占用进程：
+
 ```bash
 # 查看占用进程
 ss -tlnp | grep 7070
@@ -135,6 +137,7 @@ ss -tlnp | grep 7070
 **Q: 后台启动后怎么看日志？**
 
 日志文件位于 `logs/webui.log`：
+
 ```bash
 tail -f logs/webui.log    # 实时查看
 tail -20 logs/webui.log   # 最近 20 行
@@ -170,19 +173,19 @@ python scripts/predict.py 600000 002741 600519
 
 ### 参数参考
 
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `symbols` | (必填) | 股票代码，支持多个。格式：`600000`、`002741`、`sh000001`、`sz002741` |
-| `--pred-len` | 30 | 预测交易日数 |
-| `--model` | small | 模型大小：`mini`（4.1M 参数，最快）/ `small`（24.7M，推荐）/ `base`（102.3M，最准） |
-| `--device` | cpu | 计算设备：`cpu` / `cuda:0` / `mps` |
-| `--temperature` / `-T` | 1.2 | 采样温度，越高越随机 |
-| `--top-p` | 0.95 | 核采样概率阈值 |
-| `--samples` | 2 | 采样次数，多次采样取平均可提升稳定性 |
-| `--lookback` | 400 | 回看历史天数 |
-| `--no-limit` | 关闭 | 默认开启 ±10% 涨跌停约束，加此选项关闭 |
-| `--output-dir` | outputs | 输出目录 |
-| `--tdxdir` | `~/.local/share/tdxcfv/drive_c/tc/` | TDX 数据目录 |
+| 参数                   | 默认值                              | 说明                                                                                |
+| ---------------------- | ----------------------------------- | ----------------------------------------------------------------------------------- |
+| `symbols`              | (必填)                              | 股票代码，支持多个。格式：`600000`、`002741`、`sh000001`、`sz002741`                |
+| `--pred-len`           | 30                                  | 预测交易日数                                                                        |
+| `--model`              | small                               | 模型大小：`mini`（4.1M 参数，最快）/ `small`（24.7M，推荐）/ `base`（102.3M，最准） |
+| `--device`             | cpu                                 | 计算设备：`cpu` / `cuda:0` / `mps`                                                  |
+| `--temperature` / `-T` | 1.2                                 | 采样温度，越高越随机                                                                |
+| `--top-p`              | 0.95                                | 核采样概率阈值                                                                      |
+| `--samples`            | 2                                   | 采样次数，多次采样取平均可提升稳定性                                                |
+| `--lookback`           | 400                                 | 回看历史天数                                                                        |
+| `--no-limit`           | 关闭                                | 默认开启 ±10% 涨跌停约束，加此选项关闭                                              |
+| `--output-dir`         | outputs                             | 输出目录                                                                            |
+| `--tdxdir`             | `~/.local/share/tdxcfv/drive_c/tc/` | TDX 数据目录                                                                        |
 
 ### 使用示例
 
@@ -216,12 +219,13 @@ python scripts/predict.py --no-limit 600000
 
 每只股票生成两个文件，保存在 `outputs/` 目录下：
 
-| 文件 | 说明 |
-|---|---|
-| `pred_{代码}_{日期}.csv` | 预测数据，包含 date、open、high、low、close、volume、amount |
-| `pred_{代码}_{日期}_chart.html` | 交互式图表，用浏览器打开查看 |
+| 文件                            | 说明                                                        |
+| ------------------------------- | ----------------------------------------------------------- |
+| `pred_{代码}_{日期}.csv`        | 预测数据，包含 date、open、high、low、close、volume、amount |
+| `pred_{代码}_{日期}_chart.html` | 交互式图表，用浏览器打开查看                                |
 
 CSV 文件示例：
+
 ```
 date,open,high,low,close,volume,amount
 2026-05-07,9.02,9.15,8.95,9.08,12345678.00,123456789.00
@@ -230,6 +234,7 @@ date,open,high,low,close,volume,amount
 ```
 
 HTML 图表包含：
+
 - 最近 60 日历史收盘价（蓝色实线）
 - 预测收盘价（红色虚线）
 - 鼠标悬停显示具体数据
@@ -262,25 +267,27 @@ HTML 图表包含：
 
 脚本自动识别市场，支持以下格式：
 
-| 输入格式 | 识别结果 | 说明 |
-|---|---|---|
-| `600000` | sh600000 | 6 开头自动识别为沪市 |
-| `000001` | sz000001 | 0/3 开头自动识别为深市 |
-| `sh600000` | sh600000 | 显式指定沪市 |
-| `sz002741` | sz002741 | 显式指定深市 |
-| `SH600000` | sh600000 | 大小写不敏感 |
+| 输入格式   | 识别结果 | 说明                   |
+| ---------- | -------- | ---------------------- |
+| `600000`   | sh600000 | 6 开头自动识别为沪市   |
+| `000001`   | sz000001 | 0/3 开头自动识别为深市 |
+| `sh600000` | sh600000 | 显式指定沪市           |
+| `sz002741` | sz002741 | 显式指定深市           |
+| `SH600000` | sh600000 | 大小写不敏感           |
 
 ### 常见问题
 
 **Q: 提示 "TDX 中未找到 xxx 的数据"**
 
 TDX 客户端未下载该股票数据。解决方式：
+
 1. 打开 TDX 客户端，访问该股票页面触发数据下载
 2. 确认 TDX 数据目录正确（默认 `~/.local/share/tdxcfv/drive_c/tc/`）
 
 **Q: 提示 "数据不足: N 根 < 回看 400"**
 
 该股票在 TDX 中的历史数据不足 400 个交易日。可降低回看天数：
+
 ```bash
 python scripts/predict.py --lookback 200 600000
 ```
@@ -294,6 +301,7 @@ python scripts/predict.py --lookback 200 600000
 **Q: GPU 模式报错**
 
 确认 PyTorch 支持 CUDA：
+
 ```bash
 python -c "import torch; print(torch.cuda.is_available())"
 # 应输出 True
@@ -302,6 +310,7 @@ python -c "import torch; print(torch.cuda.is_available())"
 **Q: 首次运行很慢**
 
 首次运行需要从 HuggingFace 下载模型（约 100MB），后续使用缓存。如果网络不佳，可设置镜像：
+
 ```bash
 export HF_ENDPOINT=https://hf-mirror.com
 python scripts/predict.py 600000
@@ -331,6 +340,7 @@ python scripts/predict.py 600000 002741
 ### 输出文件与 WebUI 联动
 
 `predict.py` 生成的 CSV 文件可直接在 WebUI 中加载：
+
 1. 将 CSV 文件复制到 `webui/data/` 目录
 2. 在 WebUI 界面选择该文件
 3. WebUI 会自动解析并展示 K 线图

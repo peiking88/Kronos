@@ -14,17 +14,18 @@
 ### 2) System Flow
 
 ```text
-[OHLCV DataFrame + Timestamps] 
-  → calc_time_stamps() extracts [minute, hour, weekday, day, month] 
-  → Z-score normalization (per-window mean/std, clip=5) 
-  → KronosTokenizer.encode() quantizes to discrete (s1, s2) tokens 
-  → Kronos.decode_s1() + decode_s2() autoregressively sample next tokens 
-  → KronosTokenizer.decode() reconstructs to price space 
-  → Inverse normalization (x * std + mean) 
+[OHLCV DataFrame + Timestamps]
+  → calc_time_stamps() extracts [minute, hour, weekday, day, month]
+  → Z-score normalization (per-window mean/std, clip=5)
+  → KronosTokenizer.encode() quantizes to discrete (s1, s2) tokens
+  → Kronos.decode_s1() + decode_s2() autoregressively sample next tokens
+  → KronosTokenizer.decode() reconstructs to price space
+  → Inverse normalization (x * std + mean)
   → [Prediction DataFrame]
 ```
 
 Detailed trace for `KronosPredictor.predict()` (`model/kronos.py:519`):
+
 1. Validate required columns `['open', 'high', 'low', 'close']` exist, fill missing volume/amount
 2. `calc_time_stamps()` derives 5 temporal features from timestamps
 3. Z-score normalize: `x = (x - x_mean) / (x_std + 1e-5)`, clip to `[-5, 5]`
@@ -37,28 +38,28 @@ Detailed trace for `KronosPredictor.predict()` (`model/kronos.py:519`):
 
 ### 3) Layer/Module Responsibilities
 
-| Layer or module | Owns | Must not own | Evidence |
-|-----------------|------|--------------|----------|
-| `KronosTokenizer` | Data compression: continuous OHLCV → discrete bipolar tokens via BSQuantizer | Token prediction / autoregressive logic | `model/kronos.py:13-177` |
-| `Kronos` (predictor) | Hierarchical autoregressive token prediction (s1 first, then s2 conditioned on s1) | Tokenization, price normalization | `model/kronos.py:180-328` |
-| `KronosPredictor` | Full inference pipeline: normalization → tokenization → prediction → denormalization | Model training, data fetching | `model/kronos.py:482-661` |
-| `module.py` | Neural building blocks: BSQuantizer, TransformerBlock, attention, embeddings, DualHead | High-level prediction workflow | `model/module.py` |
-| `finetune/config.py` | Qlib pipeline configuration (paths, hyperparameters, time ranges) | Inference logic | `finetune/config.py` |
-| `finetune_csv/configs/*.yaml` | CSV pipeline YAML configuration | Training loop logic | `finetune_csv/configs/` |
-| `webui/app.py` | Flask web server, Plotly chart rendering, model selection UI | Model logic (delegates to `model/`) | `webui/app.py` |
+| Layer or module               | Owns                                                                                   | Must not own                            | Evidence                  |
+| ----------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------- |
+| `KronosTokenizer`             | Data compression: continuous OHLCV → discrete bipolar tokens via BSQuantizer           | Token prediction / autoregressive logic | `model/kronos.py:13-177`  |
+| `Kronos` (predictor)          | Hierarchical autoregressive token prediction (s1 first, then s2 conditioned on s1)     | Tokenization, price normalization       | `model/kronos.py:180-328` |
+| `KronosPredictor`             | Full inference pipeline: normalization → tokenization → prediction → denormalization   | Model training, data fetching           | `model/kronos.py:482-661` |
+| `module.py`                   | Neural building blocks: BSQuantizer, TransformerBlock, attention, embeddings, DualHead | High-level prediction workflow          | `model/module.py`         |
+| `finetune/config.py`          | Qlib pipeline configuration (paths, hyperparameters, time ranges)                      | Inference logic                         | `finetune/config.py`      |
+| `finetune_csv/configs/*.yaml` | CSV pipeline YAML configuration                                                        | Training loop logic                     | `finetune_csv/configs/`   |
+| `webui/app.py`                | Flask web server, Plotly chart rendering, model selection UI                           | Model logic (delegates to `model/`)     | `webui/app.py`            |
 
 ### 4) Reused Patterns
 
-| Pattern | Where found | Why it exists |
-|---------|-------------|---------------|
-| **Two-stage hierarchical prediction** | `Kronos.forward()`, `auto_regressive_inference()` | Predict coarse s1 token first, then fine s2 conditioned on s1 — captures dependency structure |
-| **Binary Spherical Quantization** | `BSQuantizer` (in `model/module.py:225-254`), `BinarySphericalQuantizer` (`module.py:39-222`) | Compresses continuous financial data to discrete codebook using bipolar {-1,+1} quantization |
-| **Sliding window normalization** | `KronosPredictor.predict()`, `QlibDataset.__getitem__()` | Mean/std computed only on lookback window to prevent future data leakage |
-| **Teacher forcing + autoregressive sampling** | `Kronos.forward(use_teacher_forcing=True/False)` | Training uses teacher forcing; inference uses sampling from s1 logits |
-| **Ring buffer context management** | `auto_regressive_inference()` lines 408-454 | Maintains max_context-length sliding window during autoregressive generation |
-| **Rotary Position Embedding (RoPE)** | `MultiHeadAttentionWithRoPE`, `RotaryPositionalEmbedding` (module.py:284-312) | Encodes positional information in attention without learned embeddings |
-| **Dependency-Aware Layer** | `DependencyAwareLayer` (module.py:446-462) | Cross-attention where s1 embedding conditions s2 prediction |
-| **ConfigLoader pattern** | CSV finetuning | YAML config → Python object with path resolution and template substitution |
+| Pattern                                       | Where found                                                                                   | Why it exists                                                                                 |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **Two-stage hierarchical prediction**         | `Kronos.forward()`, `auto_regressive_inference()`                                             | Predict coarse s1 token first, then fine s2 conditioned on s1 — captures dependency structure |
+| **Binary Spherical Quantization**             | `BSQuantizer` (in `model/module.py:225-254`), `BinarySphericalQuantizer` (`module.py:39-222`) | Compresses continuous financial data to discrete codebook using bipolar {-1,+1} quantization  |
+| **Sliding window normalization**              | `KronosPredictor.predict()`, `QlibDataset.__getitem__()`                                      | Mean/std computed only on lookback window to prevent future data leakage                      |
+| **Teacher forcing + autoregressive sampling** | `Kronos.forward(use_teacher_forcing=True/False)`                                              | Training uses teacher forcing; inference uses sampling from s1 logits                         |
+| **Ring buffer context management**            | `auto_regressive_inference()` lines 408-454                                                   | Maintains max_context-length sliding window during autoregressive generation                  |
+| **Rotary Position Embedding (RoPE)**          | `MultiHeadAttentionWithRoPE`, `RotaryPositionalEmbedding` (module.py:284-312)                 | Encodes positional information in attention without learned embeddings                        |
+| **Dependency-Aware Layer**                    | `DependencyAwareLayer` (module.py:446-462)                                                    | Cross-attention where s1 embedding conditions s2 prediction                                   |
+| **ConfigLoader pattern**                      | CSV finetuning                                                                                | YAML config → Python object with path resolution and template substitution                    |
 
 ### 5) Known Architectural Risks
 

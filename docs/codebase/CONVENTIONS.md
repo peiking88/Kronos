@@ -4,13 +4,13 @@
 
 ### 1) Naming Rules
 
-| Item | Rule | Example | Evidence |
-|------|------|---------|----------|
-| Files | snake_case | `kronos.py`, `prediction_example.py`, `qlib_data_preprocess.py`, `config_loader.py` | file listings |
-| Functions/methods | snake_case | `calc_time_stamps()`, `auto_regressive_inference()`, `top_k_top_p_filtering()`, `prepare_stock_data()` | `model/kronos.py:472`, `examples/prediction_akshare_2024-2025.py:28` |
-| Classes | PascalCase | `KronosTokenizer`, `KronosPredictor`, `ConfigLoader`, `BinarySphericalQuantizer` | `model/kronos.py:13,180,482`, `model/module.py:39` |
-| Constants | UPPER_SNAKE | `TEST_CTX_LEN`, `MODEL_REVISION`, `TOKENIZER_PRETRAINED`, `MSE_TOLERANCE` | `tests/test_kronos_regression.py:17-28`, `examples/prediction_cn_markets_day.py:38-46` |
-| Private methods | underscore prefix | `_init_weights()`, `_load_config()`, `_update_cos_sin_cache()`, `_set_benchmark()` | `model/kronos.py:225`, `finetune_csv/config_loader.py:13`, `model/module.py:293` |
+| Item              | Rule              | Example                                                                                                | Evidence                                                                               |
+| ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| Files             | snake_case        | `kronos.py`, `prediction_example.py`, `qlib_data_preprocess.py`, `config_loader.py`                    | file listings                                                                          |
+| Functions/methods | snake_case        | `calc_time_stamps()`, `auto_regressive_inference()`, `top_k_top_p_filtering()`, `prepare_stock_data()` | `model/kronos.py:472`, `examples/prediction_akshare_2024-2025.py:28`                   |
+| Classes           | PascalCase        | `KronosTokenizer`, `KronosPredictor`, `ConfigLoader`, `BinarySphericalQuantizer`                       | `model/kronos.py:13,180,482`, `model/module.py:39`                                     |
+| Constants         | UPPER_SNAKE       | `TEST_CTX_LEN`, `MODEL_REVISION`, `TOKENIZER_PRETRAINED`, `MSE_TOLERANCE`                              | `tests/test_kronos_regression.py:17-28`, `examples/prediction_cn_markets_day.py:38-46` |
+| Private methods   | underscore prefix | `_init_weights()`, `_load_config()`, `_update_cos_sin_cache()`, `_set_benchmark()`                     | `model/kronos.py:225`, `finetune_csv/config_loader.py:13`, `model/module.py:293`       |
 
 ### 2) Formatting and Linting
 

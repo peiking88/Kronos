@@ -40,25 +40,25 @@ description: "Kronos 项目环境完整性检查与测试运行。检查 Python 
 
 关键依赖列表（任一缺失会导致后续阶段失败）：
 
-| 包名 | 用途 | 检查命令 | 来源 |
-|---|---|---|---|
-| torch | 模型推理 | `import torch` | requirements.txt |
-| pandas | 数据处理 | `import pandas` | requirements.txt |
-| numpy | 数值计算 | `import numpy` | requirements.txt |
-| einops | 模型张量操作 | `import einops` | requirements.txt |
-| safetensors | 模型加载 | `import safetensors` | requirements.txt |
-| tqdm | 进度条 | `import tqdm` | requirements.txt |
-| huggingface_hub | 模型下载 | `import huggingface_hub` | requirements.txt |
-| flask | WebUI 后端 | `import flask` | webui/requirements.txt |
-| flask_cors | 跨域支持 | `import flask_cors` | webui/requirements.txt |
-| plotly | 图表渲染 | `import plotly` | webui/requirements.txt |
-| tdxdata | TDX 本地数据 | `import tdxdata` | editable install (tdxdata/) |
+| 包名            | 用途         | 检查命令                 | 来源                                          |
+| --------------- | ------------ | ------------------------ | --------------------------------------------- |
+| torch           | 模型推理     | `import torch`           | requirements.txt                              |
+| pandas          | 数据处理     | `import pandas`          | requirements.txt                              |
+| numpy           | 数值计算     | `import numpy`           | requirements.txt                              |
+| einops          | 模型张量操作 | `import einops`          | requirements.txt                              |
+| safetensors     | 模型加载     | `import safetensors`     | requirements.txt                              |
+| tqdm            | 进度条       | `import tqdm`            | requirements.txt                              |
+| huggingface_hub | 模型下载     | `import huggingface_hub` | requirements.txt                              |
+| flask           | WebUI 后端   | `import flask`           | webui/requirements.txt                        |
+| flask_cors      | 跨域支持     | `import flask_cors`      | webui/requirements.txt                        |
+| plotly          | 图表渲染     | `import plotly`          | webui/requirements.txt                        |
+| tdxdata         | TDX 本地数据 | `import tdxdata`         | editable install (/home/li/peiking88/tdxdata) |
 
 **开发依赖**（仅运行测试需要，不在 requirements.txt 中）：
 
-| 包名 | 用途 | 检查命令 |
-|---|---|---|
-| pytest | 测试运行 | `import pytest` |
+| 包名           | 用途                             | 检查命令                |
+| -------------- | -------------------------------- | ----------------------- |
+| pytest         | 测试运行                         | `import pytest`         |
 | pytest-timeout | 测试超时控制（`--timeout` 参数） | `import pytest_timeout` |
 
 检查方式：逐个 `python -c "import <pkg>"`，收集缺失列表。
@@ -73,7 +73,7 @@ pip install -i https://mirrors.aliyun.com/pypi/simple/ -r webui/requirements.txt
 # 开发依赖
 pip install -i https://mirrors.aliyun.com/pypi/simple/ pytest
 # tdxdata 子包（editable install，不能用镜像）
-pip install -e tdxdata/
+pip install -e /home/li/peiking88/tdxdata
 ```
 
 **关于 matplotlib**：`requirements.txt` 中固定了 `matplotlib==3.9.3`，但该版本与 Python 3.14 不兼容（legend RecursionError）。如果安装时报错或 import 失败，可忽略——项目已全面使用 plotly 替代 matplotlib。后续建议从 requirements.txt 中移除 matplotlib。
@@ -95,6 +95,7 @@ PYTHONPATH=. pytest tests/test_kronos_regression.py -v --timeout=550
 ```
 
 **关键点**：
+
 - 必须设置 `PYTHONPATH=.`，因为测试中 `from model import ...` 依赖项目根目录在搜索路径中
 - 项目没有 `conftest.py` 或 `pytest.ini`，所以 `PYTHONPATH` 是必须的
 - 测试会从 HuggingFace 下载模型（首次约 100MB），后续使用缓存
@@ -147,15 +148,15 @@ PYTHONPATH=. pytest tests/test_kronos_regression.py -v --timeout=550
 
 ## 已知问题与修复
 
-| 问题 | 原因 | 修复方式 |
-|---|---|---|
-| venv 中无 python 可执行文件 | 项目迁移后绝对路径符号链接失效 | 重建指向系统 python 的链接 |
-| `ModuleNotFoundError: No module named 'model'` | pytest 未设置 PYTHONPATH | `PYTHONPATH=. pytest` |
-| matplotlib legend RecursionError | Python 3.14 与 matplotlib 3.9.x 不兼容 | 使用 plotly 代替，可从 requirements.txt 移除 matplotlib |
-| kaleido PNG 导出失败 | kaleido 1.x 需要浏览器引擎 | 改用 `fig.write_html()` |
-| plotly `add_vline` TypeError | pandas 3.x Timestamp 加法不兼容 | 使用 `fig.add_shape()` 代替 |
-| `import tdxdata` 失败 | tdxdata 子包未安装 | 在项目根目录执行 `pip install -e tdxdata/` |
-| TDX 数据目录不存在 | 未安装 TDX 客户端或路径不对 | 检查 `~/.local/share/tdxcfv/drive_c/tc/` |
+| 问题                                           | 原因                                   | 修复方式                                                     |
+| ---------------------------------------------- | -------------------------------------- | ------------------------------------------------------------ |
+| venv 中无 python 可执行文件                    | 项目迁移后绝对路径符号链接失效         | 重建指向系统 python 的链接                                   |
+| `ModuleNotFoundError: No module named 'model'` | pytest 未设置 PYTHONPATH               | `PYTHONPATH=. pytest`                                        |
+| matplotlib legend RecursionError               | Python 3.14 与 matplotlib 3.9.x 不兼容 | 使用 plotly 代替，可从 requirements.txt 移除 matplotlib      |
+| kaleido PNG 导出失败                           | kaleido 1.x 需要浏览器引擎             | 改用 `fig.write_html()`                                      |
+| plotly `add_vline` TypeError                   | pandas 3.x Timestamp 加法不兼容        | 使用 `fig.add_shape()` 代替                                  |
+| `import tdxdata` 失败                          | tdxdata 子包未安装                     | 在项目根目录执行 `pip install -e /home/li/peiking88/tdxdata` |
+| TDX 数据目录不存在                             | 未安装 TDX 客户端或路径不对            | 检查 `~/.local/share/tdxcfv/drive_c/tc/`                     |
 
 ## 边界情况
 

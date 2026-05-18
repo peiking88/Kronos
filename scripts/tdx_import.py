@@ -423,10 +423,19 @@ class TdxDataImporter:
         os.makedirs(period_dir, exist_ok=True)
 
         if splits:
-            for split_name, (s_start, s_end) in splits.items():
+            # val/test 需要 lookback + predict 窗口的前置历史数据
+            lookback_pad = 110  # lookback_window(90) + predict_window(10) + 余量
+            split_order = ["train", "val", "test"]
+            for split_name in split_order:
+                s_start, s_end = splits[split_name]
                 split_data = {}
                 for sym, sdf in dataset.items():
-                    mask = (sdf.index >= s_start) & (sdf.index <= s_end)
+                    if split_name == "train":
+                        mask = (sdf.index >= s_start) & (sdf.index <= s_end)
+                    else:
+                        # 前移起始日期以包含 lookback 历史
+                        pad_start = pd.Timestamp(s_start) - pd.Timedelta(days=int(lookback_pad * 1.5))
+                        mask = (sdf.index >= pad_start) & (sdf.index <= s_end)
                     subset = sdf[mask]
                     if not subset.empty:
                         split_data[sym] = subset
@@ -440,7 +449,8 @@ class TdxDataImporter:
                           f"with available data. Adjust --{split_name}-range "
                           f"or remove --start-date/--end-date to import all data.")
                 else:
-                    print(f"  Saved {fpath} ({len(split_data)} symbols)")
+                    pad_note = f" (padded from {pad_start.strftime('%Y-%m-%d')})" if split_name != "train" else ""
+                    print(f"  Saved {fpath} ({len(split_data)} symbols){pad_note}")
         else:
             fpath = os.path.join(period_dir, "data.pkl")
             with open(fpath, "wb") as f:

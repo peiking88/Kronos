@@ -4,16 +4,16 @@
 
 ### 1) Top-Level Map
 
-| Path | Purpose | Evidence |
-|------|---------|----------|
-| `model/` | Core model: KronosTokenizer, Kronos (predictor), KronosPredictor + neural network modules | `model/__init__.py`, `model/kronos.py`, `model/module.py` |
-| `examples/` | Usage examples: single/batch prediction, A-share data fetching, backtesting | `examples/prediction_example.py`, `examples/prediction_cn_markets_day.py` |
-| `finetune/` | Qlib-based finetuning pipeline for A-share markets (tokenizer + predictor + backtest) | `finetune/config.py`, `finetune/dataset.py` |
-| `finetune_csv/` | CSV-based finetuning pipeline for custom data (e.g., HK stocks) | `finetune_csv/config_loader.py`, `finetune_csv/configs/` |
-| `webui/` | Flask web UI for interactive prediction with Plotly charts | `webui/app.py`, `webui/templates/index.html` |
-| `tests/` | Regression tests for KronosPredictor | `tests/test_kronos_regression.py` |
-| `figures/` | README images (logo, architecture overview, prediction examples) | `figures/overview.png` |
-| `docs/` | Generated codebase documentation | `docs/codebase/` |
+| Path            | Purpose                                                                                   | Evidence                                                                  |
+| --------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `model/`        | Core model: KronosTokenizer, Kronos (predictor), KronosPredictor + neural network modules | `model/__init__.py`, `model/kronos.py`, `model/module.py`                 |
+| `examples/`     | Usage examples: single/batch prediction, A-share data fetching, backtesting               | `examples/prediction_example.py`, `examples/prediction_cn_markets_day.py` |
+| `finetune/`     | Qlib-based finetuning pipeline for A-share markets (tokenizer + predictor + backtest)     | `finetune/config.py`, `finetune/dataset.py`                               |
+| `finetune_csv/` | CSV-based finetuning pipeline for custom data (e.g., HK stocks)                           | `finetune_csv/config_loader.py`, `finetune_csv/configs/`                  |
+| `webui/`        | Flask web UI for interactive prediction with Plotly charts                                | `webui/app.py`, `webui/templates/index.html`                              |
+| `tests/`        | Regression tests for KronosPredictor                                                      | `tests/test_kronos_regression.py`                                         |
+| `figures/`      | README images (logo, architecture overview, prediction examples)                          | `figures/overview.png`                                                    |
+| `docs/`         | Generated codebase documentation                                                          | `docs/codebase/`                                                          |
 
 ### 2) Entry Points
 
@@ -31,14 +31,14 @@
 
 ### 3) Module Boundaries
 
-| Boundary | What belongs here | What must not be here |
-|----------|-------------------|------------------------|
-| `model/` | KronosTokenizer, Kronos predictor, KronosPredictor, neural network building blocks (TransformerBlock, BSQuantizer, embeddings) | Data fetching, UI logic, training loops |
-| `examples/` | Standalone demonstration scripts with data fetching + inference + visualization | Shared library code (import from `model/` instead) |
-| `finetune/` | Qlib-specific data preprocessing, training loops, backtesting for A-share daily data | General-purpose inference (use `model/`) |
-| `finetune_csv/` | CSV-based custom data finetuning with YAML config | Qlib-specific logic (use `finetune/`) |
-| `webui/` | Flask server, HTML templates, prediction result caching | Model logic (use `model/`) |
-| `tests/` | Regression tests, test data fixtures | Production code |
+| Boundary        | What belongs here                                                                                                              | What must not be here                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
+| `model/`        | KronosTokenizer, Kronos predictor, KronosPredictor, neural network building blocks (TransformerBlock, BSQuantizer, embeddings) | Data fetching, UI logic, training loops            |
+| `examples/`     | Standalone demonstration scripts with data fetching + inference + visualization                                                | Shared library code (import from `model/` instead) |
+| `finetune/`     | Qlib-specific data preprocessing, training loops, backtesting for A-share daily data                                           | General-purpose inference (use `model/`)           |
+| `finetune_csv/` | CSV-based custom data finetuning with YAML config                                                                              | Qlib-specific logic (use `finetune/`)              |
+| `webui/`        | Flask server, HTML templates, prediction result caching                                                                        | Model logic (use `model/`)                         |
+| `tests/`        | Regression tests, test data fixtures                                                                                           | Production code                                    |
 
 ### 4) Naming and Organization Rules
 

@@ -27,11 +27,11 @@ cd /home/li/peiking88/Kronos && .venv/bin/python -m pytest tests/ -v
 
 ### 3) Test Scope Matrix
 
-| Scope | Covered? | Typical target | Notes |
-|-------|----------|----------------|-------|
-| Unit | No | [TODO] | No unit tests for individual modules (BSQuantizer, TransformerBlock, etc.) |
-| Integration | Partial | KronosPredictor end-to-end inference | Only regression tests (output comparison) + MSE validation exist |
-| E2E | No | [TODO] | No end-to-end test from data fetch → prediction → visualization |
+| Scope       | Covered? | Typical target                       | Notes                                                                      |
+| ----------- | -------- | ------------------------------------ | -------------------------------------------------------------------------- |
+| Unit        | No       | [TODO]                               | No unit tests for individual modules (BSQuantizer, TransformerBlock, etc.) |
+| Integration | Partial  | KronosPredictor end-to-end inference | Only regression tests (output comparison) + MSE validation exist           |
+| E2E         | No       | [TODO]                               | No end-to-end test from data fetch → prediction → visualization            |
 
 ### 4) Mocking and Isolation Strategy
 

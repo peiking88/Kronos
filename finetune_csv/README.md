@@ -2,16 +2,16 @@
 
 This module provides a comprehensive pipeline for fine-tuning Kronos models on your own CSV-formatted financial data. It supports both sequential training (tokenizer followed by predictor) and individual component training, with full distributed training capabilities.
 
-
 ## 1. Data Preparation
 
 ### Required Data Format
 
 Your CSV file must contain the following columns:
+
 - `timestamps`: DateTime stamps for each data point
 - `open`: Opening price
 - `high`: Highest price
-- `low`: Lowest price  
+- `low`: Lowest price
 - `close`: Closing price
 - `volume`: Trading volume
 - `amount`: Trading amount
@@ -20,17 +20,15 @@ Your CSV file must contain the following columns:
 
 ### Sample Data Format
 
-| timestamps | open | close | high | low | volume | amount |
-|------------|------|-------|------|-----|--------|--------|
-| 2019/11/26 9:35 | 182.45215 | 184.45215 | 184.95215 | 182.45215 | 15136000 | 0 |
-| 2019/11/26 9:40 | 184.35215 | 183.85215 | 184.55215 | 183.45215 | 4433300 | 0 |
-| 2019/11/26 9:45 | 183.85215 | 183.35215 | 183.95215 | 182.95215 | 3070900 | 0 |
+| timestamps      | open      | close     | high      | low       | volume   | amount |
+| --------------- | --------- | --------- | --------- | --------- | -------- | ------ |
+| 2019/11/26 9:35 | 182.45215 | 184.45215 | 184.95215 | 182.45215 | 15136000 | 0      |
+| 2019/11/26 9:40 | 184.35215 | 183.85215 | 184.55215 | 183.45215 | 4433300  | 0      |
+| 2019/11/26 9:45 | 183.85215 | 183.35215 | 183.95215 | 182.95215 | 3070900  | 0      |
 
 > **Reference**: Check `data/HK_ali_09988_kline_5min_all.csv` for a complete example of the proper data format.
 
-
 ## 2. Config Preparation
-
 
 Please edit the correct data path & pretrained model path and set your training parameters.
 
@@ -38,13 +36,13 @@ Please edit the correct data path & pretrained model path and set your training 
 # Data configuration
 data:
   data_path: "/path/to/your/data.csv"
-  lookback_window: 512        # Historical data points to use
-  predict_window: 48           # Future points to predict
-  max_context: 512            # Maximum context length
+  lookback_window: 512 # Historical data points to use
+  predict_window: 48 # Future points to predict
+  max_context: 512 # Maximum context length
 
 ...
-
 ```
+
 There are some other settings here, please see `configs/config_ali09988_candle-5min.yaml` for more comments.
 
 ## 3. Training
@@ -94,10 +92,12 @@ torchrun --standalone --nproc_per_node=8 train_sequential.py --config configs/co
 The training process generates several outputs:
 
 ### Model Checkpoints
+
 - **Tokenizer**: Saved to `{base_save_path}/{exp_name}/tokenizer/best_model/`
 - **Predictor**: Saved to `{base_save_path}/{exp_name}/basemodel/best_model/`
 
 ### Training Logs
+
 - **Console output**: Real-time training progress and metrics
 - **Log files**: Detailed logs saved to `{base_save_path}/logs/`
 - **Validation tracking**: Best models are saved based on validation loss
@@ -115,6 +115,3 @@ The following images show example training results on alibaba (HK stock) data:
 ![Training Result 4](examples/HK_ali_09988_kline_5min_all_historical_20250919_074042.png)
 
 ![Training Result 5](examples/HK_ali_09988_kline_5min_all_historical_20250919_074251.png)
-
-
-

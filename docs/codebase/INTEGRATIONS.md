@@ -4,22 +4,22 @@
 
 ### 1) Integration Inventory
 
-| System | Type (API/DB/Queue/etc) | Purpose | Auth model | Criticality | Evidence |
-|--------|---------------------------|---------|------------|-------------|----------|
-| HuggingFace Hub | API (model registry) | Download/upload pre-trained KronosTokenizer and Kronos models | Unauthenticated (read); token for upload | high | `model/kronos.py:4` (PyTorchModelHubMixin) |
-| akshare | Python library | Fetch A-share daily OHLCV data (stock_zh_a_hist) | None (free) | medium | `examples/prediction_cn_markets_day.py:28,57` |
-| 东方财富 (EastMoney) | HTTP API | Fetch A-share K-line data with 前复权 adjustment | None (push2his.eastmoney.com endpoint) | medium | `examples/get_akshare_date_2024-2025_x.py:46-58` |
-| Qlib (Microsoft) | Python library + local data | Financial data management, preparation, and backtesting for A-share finetuning | None (local data) | medium | `finetune/config.py:13`, `finetune/dataset.py` |
-| Comet ML | API (experiment tracking) | Optional training metric logging | API key in config | low | `finetune/config.py:75-82` |
+| System               | Type (API/DB/Queue/etc)     | Purpose                                                                        | Auth model                               | Criticality | Evidence                                         |
+| -------------------- | --------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------- | ----------- | ------------------------------------------------ |
+| HuggingFace Hub      | API (model registry)        | Download/upload pre-trained KronosTokenizer and Kronos models                  | Unauthenticated (read); token for upload | high        | `model/kronos.py:4` (PyTorchModelHubMixin)       |
+| akshare              | Python library              | Fetch A-share daily OHLCV data (stock_zh_a_hist)                               | None (free)                              | medium      | `examples/prediction_cn_markets_day.py:28,57`    |
+| 东方财富 (EastMoney) | HTTP API                    | Fetch A-share K-line data with 前复权 adjustment                               | None (push2his.eastmoney.com endpoint)   | medium      | `examples/get_akshare_date_2024-2025_x.py:46-58` |
+| Qlib (Microsoft)     | Python library + local data | Financial data management, preparation, and backtesting for A-share finetuning | None (local data)                        | medium      | `finetune/config.py:13`, `finetune/dataset.py`   |
+| Comet ML             | API (experiment tracking)   | Optional training metric logging                                               | API key in config                        | low         | `finetune/config.py:75-82`                       |
 
 ### 2) Data Stores
 
-| Store | Role | Access layer | Key risk | Evidence |
-|-------|------|--------------|----------|----------|
-| Qlib local data (`~/.qlib/qlib_data/cn_data`) | A-share daily OHLCV features for finetuning | `finetune/qlib_data_preprocess.py` → pickle files | Path must be configured manually; stale data possible | `finetune/config.py:13` |
-| CSV files (local) | Custom market data for finetuning (e.g., HK stocks 5min) | `finetune_csv/data/*.csv` → pandas | Data format must match expected OHLCV columns | `finetune_csv/data/HK_ali_09988_kline_5min_all.csv` |
-| Test regression data (`tests/data/`) | Pinned CSV input/output for deterministic regression testing | `tests/test_kronos_regression.py` | Tests break if model revisions change | `tests/data/regression_input.csv`, `tests/data/regression_output_*.csv` |
-| Pickle datasets | Serialized preprocessed features (train/val/test splits) | `finetune/dataset.py:42` | Large files not committed to git | `finetune/config.py:41` |
+| Store                                         | Role                                                         | Access layer                                      | Key risk                                              | Evidence                                                                |
+| --------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------- |
+| Qlib local data (`~/.qlib/qlib_data/cn_data`) | A-share daily OHLCV features for finetuning                  | `finetune/qlib_data_preprocess.py` → pickle files | Path must be configured manually; stale data possible | `finetune/config.py:13`                                                 |
+| CSV files (local)                             | Custom market data for finetuning (e.g., HK stocks 5min)     | `finetune_csv/data/*.csv` → pandas                | Data format must match expected OHLCV columns         | `finetune_csv/data/HK_ali_09988_kline_5min_all.csv`                     |
+| Test regression data (`tests/data/`)          | Pinned CSV input/output for deterministic regression testing | `tests/test_kronos_regression.py`                 | Tests break if model revisions change                 | `tests/data/regression_input.csv`, `tests/data/regression_output_*.csv` |
+| Pickle datasets                               | Serialized preprocessed features (train/val/test splits)     | `finetune/dataset.py:42`                          | Large files not committed to git                      | `finetune/config.py:41`                                                 |
 
 ### 3) Secrets and Credentials Handling
 

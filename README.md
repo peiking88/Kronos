@@ -2,7 +2,6 @@
   <h2><b>Kronos: A Foundation Model for the Language of Financial Markets </b></h2>
 </div>
 
-
 <div align="center">
 
 </a> 
@@ -43,44 +42,46 @@
 
 </p>
 
-> Kronos is the **first open-source foundation model** for financial candlesticks (K-lines), 
+> Kronos is the **first open-source foundation model** for financial candlesticks (K-lines),
 > trained on data from over **45 global exchanges**.
-
 
 </div>
 
 ## 📰 News
-*   🚩 **[2025.11.10]** Kronos has been accpeted by AAAI 2026.
-*   🚩 **[2025.08.17]** We have released the scripts for fine-tuning! Check them out to adapt Kronos to your own tasks.
-*   🚩 **[2025.08.02]** Our paper is now available on [arXiv](https://arxiv.org/abs/2508.02739)!
+
+- 🚩 **[2025.11.10]** Kronos has been accpeted by AAAI 2026.
+- 🚩 **[2025.08.17]** We have released the scripts for fine-tuning! Check them out to adapt Kronos to your own tasks.
+- 🚩 **[2025.08.02]** Our paper is now available on [arXiv](https://arxiv.org/abs/2508.02739)!
 
 <p align="center">
 
 ## 📜 Introduction
 
-**Kronos** is a family of decoder-only foundation models, pre-trained specifically for the "language" of financial markets—K-line sequences. Unlike general-purpose TSFMs, Kronos is designed to handle the unique, high-noise characteristics of financial data. It leverages a novel two-stage framework: 
-1. A specialized tokenizer first quantizes continuous, multi-dimensional K-line data (OHLCV) into **hierarchical discrete tokens**. 
+**Kronos** is a family of decoder-only foundation models, pre-trained specifically for the "language" of financial markets—K-line sequences. Unlike general-purpose TSFMs, Kronos is designed to handle the unique, high-noise characteristics of financial data. It leverages a novel two-stage framework:
+
+1. A specialized tokenizer first quantizes continuous, multi-dimensional K-line data (OHLCV) into **hierarchical discrete tokens**.
 2. A large, autoregressive Transformer is then pre-trained on these tokens, enabling it to serve as a unified model for diverse quantitative tasks.
 
 <p align="center">
     <img src="figures/overview.png" alt="" align="center" width="700px" />
 </p>
 
-## ✨ Live Demo 
-We have set up a live demo to visualize Kronos's forecasting results. The webpage showcases a forecast for the **BTC/USDT** trading pair over the next 24 hours. 
+## ✨ Live Demo
 
-**👉 [Access the Live Demo Here](https://shiyu-coder.github.io/Kronos-demo/)** 
+We have set up a live demo to visualize Kronos's forecasting results. The webpage showcases a forecast for the **BTC/USDT** trading pair over the next 24 hours.
 
-## 📦 Model Zoo 
+**👉 [Access the Live Demo Here](https://shiyu-coder.github.io/Kronos-demo/)**
+
+## 📦 Model Zoo
+
 We release a family of pre-trained models with varying capacities to suit different computational and application needs. All models are readily accessible from the Hugging Face Hub.
 
-| Model        | Tokenizer                                                                       | Context length | Params  | Open-source                                                               |
-|--------------|---------------------------------------------------------------------------------| -------------- | ------ |---------------------------------------------------------------------------|
-| Kronos-mini  | [Kronos-Tokenizer-2k](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-2k)     | 2048           | 4.1M   | ✅ [NeoQuasar/Kronos-mini](https://huggingface.co/NeoQuasar/Kronos-mini)  |
+| Model        | Tokenizer                                                                       | Context length | Params | Open-source                                                                |
+| ------------ | ------------------------------------------------------------------------------- | -------------- | ------ | -------------------------------------------------------------------------- |
+| Kronos-mini  | [Kronos-Tokenizer-2k](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-2k)     | 2048           | 4.1M   | ✅ [NeoQuasar/Kronos-mini](https://huggingface.co/NeoQuasar/Kronos-mini)   |
 | Kronos-small | [Kronos-Tokenizer-base](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-base) | 512            | 24.7M  | ✅ [NeoQuasar/Kronos-small](https://huggingface.co/NeoQuasar/Kronos-small) |
 | Kronos-base  | [Kronos-Tokenizer-base](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-base) | 512            | 102.3M | ✅ [NeoQuasar/Kronos-base](https://huggingface.co/NeoQuasar/Kronos-base)   |
 | Kronos-large | [Kronos-Tokenizer-base](https://huggingface.co/NeoQuasar/Kronos-Tokenizer-base) | 512            | 499.2M | ❌                                                                         |
-
 
 ## 🚀 Getting Started
 
@@ -124,9 +125,10 @@ predictor = KronosPredictor(model, tokenizer, max_context=512)
 #### 3. Prepare Input Data
 
 The `predict` method requires three main inputs:
--   `df`: A pandas DataFrame containing the historical K-line data. It must include columns `['open', 'high', 'low', 'close']`. `volume` and `amount` are optional.
--   `x_timestamp`: A pandas Series of timestamps corresponding to the historical data in `df`.
--   `y_timestamp`: A pandas Series of timestamps for the future periods you want to predict.
+
+- `df`: A pandas DataFrame containing the historical K-line data. It must include columns `['open', 'high', 'low', 'close']`. `volume` and `amount` are optional.
+- `x_timestamp`: A pandas Series of timestamps corresponding to the historical data in `df`.
+- `y_timestamp`: A pandas Series of timestamps for the future periods you want to predict.
 
 ```python
 import pandas as pd
@@ -145,7 +147,7 @@ x_timestamp = df.loc[:lookback-1, 'timestamps']
 y_timestamp = df.loc[lookback:lookback+pred_len-1, 'timestamps']
 ```
 
-#### 4. Generate Forecasts 
+#### 4. Generate Forecasts
 
 Call the `predict` method to generate forecasts. You can control the sampling process with parameters like `T`, `top_p`, and `sample_count` for probabilistic forecasting.
 
@@ -194,6 +196,7 @@ for i, pred_df in enumerate(pred_df_list):
 ```
 
 **Important Requirements for Batch Prediction:**
+
 - All series must have the same historical length (lookback window)
 - All series must have the same prediction length (`pred_len`)
 - Each DataFrame must contain the required columns: `['open', 'high', 'low', 'close']`
@@ -212,7 +215,6 @@ Running this script will generate a plot comparing the ground truth data against
 </p>
 
 Additionally, we provide a script that makes predictions without Volume and Amount data, which can be found in [`examples/prediction_wo_vol_example.py`](examples/prediction_wo_vol_example.py).
-
 
 ## 🔧 Finetuning on Your Own Data (A-Share Market Example)
 
@@ -240,11 +242,11 @@ The finetuning process is divided into four main steps:
 
 All settings for data, training, and model paths are centralized in `finetune/config.py`. Before running any scripts, please **modify the following paths** according to your environment:
 
-*   `qlib_data_path`: Path to your local Qlib data directory.
-*   `dataset_path`: Directory where the processed train/validation/test pickle files will be saved.
-*   `save_path`: Base directory for saving model checkpoints.
-*   `backtest_result_path`: Directory for saving backtesting results.
-*   `pretrained_tokenizer_path` and `pretrained_predictor_path`: Paths to the pre-trained models you want to start from (can be local paths or Hugging Face model names).
+- `qlib_data_path`: Path to your local Qlib data directory.
+- `dataset_path`: Directory where the processed train/validation/test pickle files will be saved.
+- `save_path`: Base directory for saving model checkpoints.
+- `backtest_result_path`: Directory for saving backtesting results.
+- `pretrained_tokenizer_path` and `pretrained_predictor_path`: Paths to the pre-trained models you want to start from (can be local paths or Hugging Face model names).
 
 You can also adjust other parameters like `instrument`, `train_time_range`, `epochs`, and `batch_size` to fit your specific task. If you don't use [Comet.ml](https://www.comet.com/), set `use_comet = False`.
 
@@ -322,19 +324,19 @@ python finetune/train_predictor_tdx.py \
   --epochs 30
 
 # Step 4: Verify with SSE Index prediction
-python scripts/predict_stocks.py sh000001 --format console
+python scripts/predict_sse.py
 ```
 
 ### What's Included
 
-| File | Purpose |
-|------|---------|
-| `scripts/tdx_import.py` | Import local TDX data with configurable price adjustment and factor caching |
-| `finetune/config_tdx.py` | Single-GPU config (后复权, RTX 4060 8GB tuned) |
-| `finetune/train_tokenizer_tdx.py` | Tokenizer single-GPU training script |
-| `finetune/train_predictor_tdx.py` | Predictor single-GPU training script (AMP fp16) |
-| `scripts/predict_stocks.py` | Stock/index prediction with MD report or console output |
-| `summary.md` | Full workflow summary and results |
+| File                              | Purpose                                                                     |
+| --------------------------------- | --------------------------------------------------------------------------- |
+| `scripts/tdx_import.py`           | Import local TDX data with configurable price adjustment and factor caching |
+| `finetune/config_tdx.py`          | Single-GPU config (后复权, RTX 4060 8GB tuned)                              |
+| `finetune/train_tokenizer_tdx.py` | Tokenizer single-GPU training script                                        |
+| `finetune/train_predictor_tdx.py` | Predictor single-GPU training script (AMP fp16)                             |
+| `scripts/predict_sse.py`          | Prediction demo on SSE Composite Index                                      |
+| `summary.md`                      | Full workflow summary and results                                           |
 
 ### Hardware Requirements
 
@@ -344,9 +346,9 @@ python scripts/predict_stocks.py sh000001 --format console
 
 ### 💡 From Demo to Production: Important Considerations
 
-*   **Raw Signals vs. Pure Alpha**: The signals generated by the model in this demo are raw predictions. In a real-world quantitative workflow, these signals would typically be fed into a portfolio optimization model. This model would apply constraints to neutralize exposure to common risk factors (e.g., market beta, style factors like size and value), thereby isolating the **"pure alpha"** and improving the strategy's robustness.
-*   **Data Handling**: The provided `QlibDataset` is an example. For different data sources or formats, you will need to adapt the data loading and preprocessing logic.
-*   **Strategy and Backtesting Complexity**: The simple top-K strategy used here is a basic starting point. Production-level strategies often incorporate more complex logic for portfolio construction, dynamic position sizing, and risk management (e.g., stop-loss/take-profit rules). Furthermore, a high-fidelity backtest should meticulously model transaction costs, slippage, and market impact to provide a more accurate estimate of real-world performance.
+- **Raw Signals vs. Pure Alpha**: The signals generated by the model in this demo are raw predictions. In a real-world quantitative workflow, these signals would typically be fed into a portfolio optimization model. This model would apply constraints to neutralize exposure to common risk factors (e.g., market beta, style factors like size and value), thereby isolating the **"pure alpha"** and improving the strategy's robustness.
+- **Data Handling**: The provided `QlibDataset` is an example. For different data sources or formats, you will need to adapt the data loading and preprocessing logic.
+- **Strategy and Backtesting Complexity**: The simple top-K strategy used here is a basic starting point. Production-level strategies often incorporate more complex logic for portfolio construction, dynamic position sizing, and risk management (e.g., stop-loss/take-profit rules). Furthermore, a high-fidelity backtest should meticulously model transaction costs, slippage, and market impact to provide a more accurate estimate of real-world performance.
 
 > **📝 AI-Generated Comments**: Please note that many of the code comments within the `finetune/` directory were generated by an AI assistant (Gemini 2.5 Pro) for explanatory purposes. While they aim to be helpful, they may contain inaccuracies. We recommend treating the code itself as the definitive source of logic.
 
@@ -422,30 +424,22 @@ If you use Kronos in your research, we would appreciate a citation to our [paper
 
 ```
 @misc{shi2025kronos,
-      title={Kronos: A Foundation Model for the Language of Financial Markets}, 
+      title={Kronos: A Foundation Model for the Language of Financial Markets},
       author={Yu Shi and Zongliang Fu and Shuo Chen and Bohan Zhao and Wei Xu and Changshui Zhang and Jian Li},
       year={2025},
       eprint={2508.02739},
       archivePrefix={arXiv},
       primaryClass={q-fin.ST},
-      url={https://arxiv.org/abs/2508.02739}, 
+      url={https://arxiv.org/abs/2508.02739},
 }
 ```
 
-## 📜 License 
+## 📜 License
+
 This project is licensed under the [MIT License](./LICENSE).
 
-
-
-
-
-
-
-
-
-
-
 ### 2026-05-05 09:35:17
+
 ```
  .gitignore                                   |    3 +
  docs/codebase/ARCHITECTURE.md                |   79 ++
@@ -465,6 +459,7 @@ This project is licensed under the [MIT License](./LICENSE).
 ```
 
 ### 2026-05-16 18:08:36
+
 ```
  .claude/skills/check-kronos-env/SKILL.md           |  165 +
  .claude/skills/finetune-kronos/SKILL.md            |  341 ++
@@ -484,6 +479,7 @@ This project is licensed under the [MIT License](./LICENSE).
 ```
 
 ### 2026-05-16 18:18:17
+
 ```
  .gitignore                                         |    5 +
  data/tdx_import_sse/1d/data.pkl                    |  Bin 27475 -> 0 bytes
@@ -503,6 +499,7 @@ This project is licensed under the [MIT License](./LICENSE).
 ```
 
 ### 2026-05-17 08:31:18
+
 ```
  README.md                 | 142 ++++++++++++++++---
  scripts/predict_stocks.py | 338 ++++++++++++++++++++++++++++++++++++++++++++++
@@ -510,6 +507,7 @@ This project is licensed under the [MIT License](./LICENSE).
 ```
 
 ### 2026-05-17 09:37:31
+
 ```
  .claude/skills/finetune-kronos/SKILL.md            |  19 +-
  .../finetune-kronos/evals/trigger_evals.json       |  48 +++---
