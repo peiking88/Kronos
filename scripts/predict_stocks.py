@@ -43,13 +43,62 @@ TDX_DIR = os.path.expanduser("~/.local/share/tdxcfv/drive_c/tc/")
 MAX_STALE_DAYS = 5
 
 
-def load_factor(code):
-    """Return the last 后复权 factor for a stock, or 1.0 if not found."""
+def derive_factor(code, df_hfq=None):
+    """从数据本身推导复权因子，确保与训练/推理数据一致。
+
+    核心问题：factor cache 可能被重新计算，导致与 pkl 数据中实际使用的
+    factor 不一致（如 sh600353 cache=18.60 vs 隐含=10.71，偏差 42%）。
+
+    推导方式：hfq 收盘价 / TDX 原始收盘价 = 因子（保证一致性）。
+    回退：本地缓存 → 在线获取 → 1.0。
+    """
+    # 方法1：从 hfq 数据与 TDX 原始数据对比推导（最可靠）
+    if df_hfq is not None and not df_hfq.empty:
+        try:
+            from mootdx.reader import Reader
+            reader = Reader.factory(market="std", tdxdir=TDX_DIR)
+            raw_df = reader.daily(symbol=code[2:])
+            if raw_df is not None and not raw_df.empty:
+                last_date = df_hfq.index[-1]
+                raw_before = raw_df[raw_df.index <= pd.Timestamp(last_date)]
+                if not raw_before.empty:
+                    raw_close = float(raw_before.iloc[-1]["close"])
+                    hfq_close = float(df_hfq.iloc[-1]["close"])
+                    if raw_close > 0 and hfq_close > 0:
+                        factor = hfq_close / raw_close
+                        print(f"  复权因子(推导): {factor:.4f} (hfq={hfq_close:.2f} / raw={raw_close:.2f})")
+                        return factor
+        except Exception:
+            pass
+
+    # 方法2：从本地缓存读取
     cache_file = os.path.join(FACTOR_DIR, f"{code}.pkl")
     if os.path.exists(cache_file):
-        f = pd.read_pickle(cache_file)
-        f.index = pd.to_datetime(f.index)
-        return float(f.sort_index()["factor"].iloc[-1])
+        try:
+            f = pd.read_pickle(cache_file)
+            f.index = pd.to_datetime(f.index)
+            factor = float(f.sort_index()["factor"].iloc[-1])
+            print(f"  复权因子(缓存): {factor:.4f} (可能与数据不一致)", file=sys.stderr)
+            return factor
+        except Exception:
+            pass
+
+    # 方法3：在线获取
+    try:
+        from mootdx.quotes import Quotes
+        from tdxdata.sources.adjust import fetch_factor
+        quotes = Quotes.factory(market='std')
+        factor_df = fetch_factor(code, "hfq", quotes_client=quotes)
+        if factor_df is not None and not factor_df.empty:
+            os.makedirs(FACTOR_DIR, exist_ok=True)
+            factor_df.to_pickle(cache_file)
+            factor = float(factor_df.sort_index()["factor"].iloc[-1])
+            print(f"  复权因子(在线): {factor:.4f}", file=sys.stderr)
+            return factor
+    except Exception as e:
+        print(f"[derive_factor] 获取 {code} 复权因子失败: {type(e).__name__}: {e}", file=sys.stderr)
+
+    print(f"[derive_factor] ⚠️ {code} 复权因子获取失败，输出为后复权价格", file=sys.stderr)
     return 1.0
 
 
@@ -138,7 +187,7 @@ def ensure_fresh_data(codes):
     return result
 
 
-def run_prediction(predictor, df, factor, bias_correction=0.0):
+def run_prediction(predictor, df, factor):
     """Forward predict next PRED_LEN days. Returns list of dicts."""
     df = df.rename(columns={"vol": "volume", "amt": "amount"})
     context = df.iloc[-LOOKBACK:]
@@ -157,11 +206,6 @@ def run_prediction(predictor, df, factor, bias_correction=0.0):
         pred_len=PRED_LEN, T=T, top_p=TOP_P,
         sample_count=SAMPLE_COUNT, verbose=False
     )
-
-    # 偏差校正（hfq 空间）
-    if abs(bias_correction) > 0.01:
-        for col in ["open", "high", "low", "close"]:
-            pred[col] = pred[col] + bias_correction
 
     rows = []
     for i, (ts, row) in enumerate(pred.iterrows()):
@@ -275,7 +319,7 @@ def console_output(all_forward, all_bt, all_conf, all_codes, errors):
         print(f"{'='*70}")
         print(f"  基准收盘价: {base:.2f}")
         if abs(bc) > 0.01:
-            print(f"  偏差校正: {bc:+.2f} (基于最近 60 天回测)")
+            print(f"  过去一个月模型偏差值: {bc:+.2f} (正值=模型预测偏低，负值=模型预测偏高)")
         print(f"{'='*70}")
         print(f"  {'日期':<14s} {'开盘':>8s} {'最高':>8s} {'最低':>8s} {'收盘':>8s} {'涨跌幅':>8s}")
         print(f"  {'-'*54}")
@@ -349,19 +393,23 @@ def main():
             errors.append(f"{code}: 数据未找到")
             continue
 
-        factor = load_factor(code)
+        factor = derive_factor(code, df)
+        if factor == 1.0:
+            errors.append(f"{code}: 复权因子获取失败，输出为后复权价格")
         name = STOCK_NAMES.get(code, code)
 
-        # 回测校准（hfq 空间）
+        # 回测校准（hfq 空间）→ 转换为实际价格空间
         df_for_cal = df.rename(columns={"vol": "volume", "amt": "amount"})
         bias_correction = backtest_calibrate(
             predictor, df_for_cal, PRED_LEN,
             lookback=LOOKBACK, temperature=T, top_p=TOP_P,
             sample_count=SAMPLE_COUNT,
         )
+        if factor != 1.0:
+            bias_correction = bias_correction / factor
 
         # Forward
-        rows, last_close_actual = run_prediction(predictor, df, factor, bias_correction)
+        rows, last_close_actual = run_prediction(predictor, df, factor)
         all_forward[code] = {"name": name, "rows": rows, "base": last_close_actual,
                              "factor": factor, "bias_correction": bias_correction}
 
@@ -400,7 +448,7 @@ def main():
         bc = info.get("bias_correction", 0.0)
         if abs(bc) > 0.01:
             lines.append(f"")
-            lines.append(f"偏差校正: **{bc:+.2f}** (基于最近 60 天回测)")
+            lines.append(f"过去一个月模型偏差值: **{bc:+.2f}** (正值=模型预测偏低，负值=模型预测偏高)")
         lines.append(f"")
         lines.append(format_table(info["rows"]))
         lines.append("")
@@ -471,7 +519,7 @@ def main():
         out_path = args.output
     else:
         codes_str = "_".join(args.codes[:3])
-        out_path = f"output/kronos_{codes_str}.md"
+        out_path = f"outputs/kronos_{codes_str}.md"
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w") as f:

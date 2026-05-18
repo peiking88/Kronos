@@ -46,16 +46,19 @@ T = 1.0
 TOP_P = 0.9
 SAMPLE_COUNT = 1
 
-def load_data(symbol: str) -> pd.DataFrame:
+def load_data(symbol: str):
+    """获取后复权(hfq)日线数据，同时获取不复权数据计算复权因子。
+    返回 (df_hfq, factor)。
+    """
     print(f"📥 Fetching {symbol} daily data from akshare ...")
 
     max_retries = 3
     df = None
 
-    # Retry mechanism
+    # Retry mechanism — 使用后复权数据（匹配模型训练数据）
     for attempt in range(1, max_retries + 1):
         try:
-            df = ak.stock_zh_a_hist(symbol=symbol, period="daily", adjust="")
+            df = ak.stock_zh_a_hist(symbol=symbol, period="daily", adjust="hfq")
             if df is not None and not df.empty:
                 break
         except Exception as e:
@@ -66,6 +69,18 @@ def load_data(symbol: str) -> pd.DataFrame:
     if df is None or df.empty:
         print(f"❌ Failed to fetch data for {symbol} after {max_retries} attempts. Exiting.")
         sys.exit(1)
+
+    # 获取不复权数据以计算复权因子
+    factor = 1.0
+    try:
+        df_raw = ak.stock_zh_a_hist(symbol=symbol, period="daily", adjust="")
+        if df_raw is not None and not df_raw.empty:
+            hfq_close = float(df["收盘"].iloc[-1])
+            raw_close = float(df_raw["收盘"].iloc[-1])
+            if raw_close > 0:
+                factor = hfq_close / raw_close
+    except Exception:
+        pass
     
     df.rename(columns={
         "日期": "date",
@@ -103,11 +118,12 @@ def load_data(symbol: str) -> pd.DataFrame:
         df["amount"] = df["close"] * df["volume"]
 
     print(f"✅ Data loaded: {len(df)} rows, range: {df['date'].min()} ~ {df['date'].max()}")
+    print(f"  后复权因子: {factor:.4f}")
 
     print("Data Head:")
     print(df.head())
 
-    return df
+    return df, factor
 
 
 def prepare_inputs(df):
@@ -163,7 +179,7 @@ def predict_future(symbol):
     model = Kronos.from_pretrained(MODEL_PRETRAINED)
     predictor = KronosPredictor(model, tokenizer, device=DEVICE, max_context=MAX_CONTEXT)
 
-    df = load_data(symbol)
+    df, factor = load_data(symbol)
     x_df, x_timestamp, y_timestamp = prepare_inputs(df)
 
     print("🔮 Generating predictions ...")
@@ -180,11 +196,16 @@ def predict_future(symbol):
 
     pred_df["date"] = y_timestamp.values
 
-    # Apply ±10% price limit
-    last_close = df["close"].iloc[-1]
-    pred_df = apply_price_limits(pred_df, last_close, limit_rate=0.1)
+    # 将预测结果从后复权空间换算为实际价格
+    if factor != 1.0:
+        for col in ["open", "high", "low", "close"]:
+            pred_df[col] = pred_df[col] / factor
 
-    # 回测校准
+    # Apply ±10% price limit（实际价格空间）
+    last_close_actual = df["close"].iloc[-1] / factor
+    pred_df = apply_price_limits(pred_df, last_close_actual, limit_rate=0.1)
+
+    # 回测校准 — 仅计算偏差值，不修改预测（hfq 空间）
     cal_df = df[["open", "high", "low", "close", "volume", "amount"]].copy()
     cal_df.index = pd.to_datetime(df["date"])
     bias_correction = backtest_calibrate(
@@ -192,16 +213,18 @@ def predict_future(symbol):
         lookback=LOOKBACK, temperature=T, top_p=TOP_P,
         sample_count=SAMPLE_COUNT,
     )
+    # 将 hfq 空间的偏差换算为实际价格空间
+    bias_correction = bias_correction / factor
     if abs(bias_correction) > 0.01:
-        print(f"  偏差校正值: {bias_correction:+.2f}")
-        for col in ["open", "high", "low", "close"]:
-            pred_df[col] = pred_df[col] + bias_correction
-        # 校正后重新约束涨跌停
-        pred_df = apply_price_limits(pred_df, last_close, limit_rate=0.1)
+        print(f"  过去一个月模型偏差值: {bias_correction:+.2f} (正值=模型预测偏低，负值=模型预测偏高)")
 
-    # Merge historical and predicted data
+    # Merge historical and predicted data（实际价格空间）
+    df_actual = df.copy()
+    if factor != 1.0:
+        for col in ["open", "high", "low", "close"]:
+            df_actual[col] = df_actual[col] / factor
     df_out = pd.concat([
-        df[["date", "open", "high", "low", "close", "volume", "amount"]],
+        df_actual[["date", "open", "high", "low", "close", "volume", "amount"]],
         pred_df[["date", "open", "high", "low", "close", "volume", "amount"]]
     ]).reset_index(drop=True)
 
@@ -211,7 +234,7 @@ def predict_future(symbol):
     print(f"✅ Prediction completed and saved: {out_file}")
 
     # Plot
-    plot_result(df, pred_df, symbol)
+    plot_result(df_actual, pred_df, symbol)
 
 
 if __name__ == "__main__":
