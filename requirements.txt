@@ -8,3 +8,8 @@ matplotlib==3.9.3
 pandas==3.0.2
 tqdm==4.67.1
 safetensors==0.6.2
+
+# 本地依赖包（editable install）
+# pip install -e ~/peiking88/opentdx
+# pip install -e ~/peiking88/mootdx
+# pip install -e ~/peiking88/tdxdata

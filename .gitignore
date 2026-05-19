@@ -59,6 +59,10 @@ Desktop.ini
 
 # Output artifacts
 outputs/
+output/
+
+# Data directories
+data/
 
 # Logs
 *.log
@@ -75,6 +79,7 @@ venv.bak/
 
 # External dependencies (never commit)
 external/
+tdxdata/
 
 # Temporary files
 *.tmp
