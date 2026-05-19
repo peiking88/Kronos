@@ -369,14 +369,20 @@ source .venv/bin/activate
 ### 一键预测
 
 ```bash
-# 预测多只股票，输出 md 报告
-.venv/bin/python scripts/predict_stocks.py sh600000 sz002741 sz300450
+# 自动读取 TDX 自选股，输出 md 报告
+.venv/bin/python scripts/predict_stocks.py
+
+# 预测指定股票，输出 md 报告
+.venv/bin/python scripts/predict_stocks.py sh600000 sz002741
+
+# 控制台表格输出
+.venv/bin/python scripts/predict_stocks.py --format console
 
 # 指定输出路径
 .venv/bin/python scripts/predict_stocks.py sz002741 -o outputs/my_pred.md
 ```
 
-报告含未来 10 日收盘价预测（实际市场价）、历史回测准确度、置信区间。
+无参数时自动读取通达信自选股（zxg.blk）。报告含未来 10 日收盘价预测（实际市场价）、历史回测准确度、置信区间，按指数→看涨→看平→看跌分类排序。
 
 ### WebUI
 

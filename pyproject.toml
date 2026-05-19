@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kronos"
+version = "1.5.0"
+description = "Kronos: 金融市场基础模型，支持 A 股 TDX 本地数据微调与预测"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "peiking88" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "torch>=2.0.0",
+    "einops>=0.8.0",
+    "huggingface_hub>=0.20.0",
+    "matplotlib>=3.7.0",
+    "tqdm",
+    "safetensors>=0.4.0",
+    "opentdx>=0.5.0",
+    "mootdx>=2.0.0",
+    "tdxdata>=1.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=9.0",
+    "pytest-timeout>=2.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["model*", "finetune*", "scripts*", "webui*"]
+exclude = ["tests*", "data*", "outputs*", "logs*", "finetune_csv*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.commitizen]
+tag_format = "$version"
+version_provider = "pep621"
+version_files = [
+    "model/__init__.py:__version__",
+]
