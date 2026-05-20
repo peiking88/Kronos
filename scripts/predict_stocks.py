@@ -13,7 +13,7 @@
 
 特性:
     - 施加10%涨跌停约束，预测价格不会超出日涨跌停范围
-    - 模型偏差值超过基准价5%时自动修正预测收盘价
+    - 模型偏差值仅作参考，不自动修正预测收盘价
     - 与上次预测结果对比，标注稳定性告警（预测跳变/方向翻转）
 """
 
@@ -34,6 +34,66 @@ from scripts.calibrate import backtest_calibrate
 
 # ---------------------------------------------------------------------------
 FACTOR_DIR = os.path.expanduser("~/.local/share/tdxcfv/drive_c/tc/.factor_cache")
+FACTOR_CACHE_1D = os.path.join(FACTOR_DIR, ".factor_1d.json")
+
+
+def prefetch_factors(codes, fresh_cache):
+    """批量获取复权因子（1日缓存）。
+
+    先检查本地 JSON 缓存（当日有效），命中则跳过 derive_factor 的网络/TDX 读取。
+    因子完整后再返回，供后续预测使用。
+
+    返回: {code: (factor: float, ok: bool)}
+        ok=True  因子有效（非 1.0 或是指数）
+        ok=False 因子获取失败，需用后复权价格输出
+    """
+    # 读取 1 日缓存
+    cache = {}
+    if os.path.exists(FACTOR_CACHE_1D):
+        try:
+            with open(FACTOR_CACHE_1D, "r") as f:
+                cache = json.load(f)
+        except Exception:
+            cache = {}
+    today_str = str(datetime.now().date())
+
+    result = {}
+    for code in codes:
+        # 指数直接跳过
+        if classify_code(code):
+            result[code] = (1.0, True)
+            continue
+
+        # 命中当日缓存
+        cached = cache.get(code)
+        if cached and cached.get("date") == today_str:
+            factor = cached["factor"]
+            ok = factor != 1.0
+            result[code] = (factor, ok)
+            print(f"  {code}: 复权因子(1日缓存)={factor:.4f}")
+            continue
+
+        # 推导因子
+        df = fresh_cache.get(code) if fresh_cache else None
+        if df is None:
+            df = get_data(code)
+        factor = derive_factor(code, df, verbose=False) if df is not None else 1.0
+        ok = factor != 1.0
+        result[code] = (factor, ok)
+
+        # 写入缓存
+        cache[code] = {"factor": factor, "date": today_str}
+
+    # 持久化缓存
+    os.makedirs(FACTOR_DIR, exist_ok=True)
+    try:
+        with open(FACTOR_CACHE_1D, "w") as f:
+            json.dump(cache, f)
+    except Exception:
+        pass
+
+    return result
+
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tdx_import", "1d")
 SSE_DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tdx_import_sse", "1d", "data.pkl")
 MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "tdx_finetune")
@@ -54,13 +114,13 @@ BULL_THRESHOLD = 0.03   # >3% 看涨
 BEAR_THRESHOLD = -0.03  # <-3% 看跌
 
 LIMIT_RATE = 0.10                # 涨跌停幅度
-BIAS_AUTO_THRESHOLD = 0.05       # 偏差自动修正阈值（占基准价比例）
+
 STABILITY_THRESHOLD = 0.15       # 预测稳定性告警阈值（累计涨跌幅变化）
 STABILITY_CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "outputs", ".pred_last.json")
 
 
-def derive_factor(code, df_hfq=None):
+def derive_factor(code, df_hfq=None, verbose=True):
     """从数据本身推导复权因子，确保与训练/推理数据一致。
 
     核心问题：factor cache 可能被重新计算，导致与 pkl 数据中实际使用的
@@ -87,7 +147,8 @@ def derive_factor(code, df_hfq=None):
                     hfq_close = float(df_hfq.iloc[-1]["close"])
                     if raw_close > 0 and hfq_close > 0:
                         factor = hfq_close / raw_close
-                        print(f"  复权因子(推导): {factor:.4f} (hfq={hfq_close:.2f} / raw={raw_close:.2f})")
+                        if verbose:
+                            print(f"  复权因子(推导): {factor:.4f} (hfq={hfq_close:.2f} / raw={raw_close:.2f})")
                         return factor
         except Exception:
             pass
@@ -99,7 +160,8 @@ def derive_factor(code, df_hfq=None):
             f = pd.read_pickle(cache_file)
             f.index = pd.to_datetime(f.index)
             factor = float(f.sort_index()["factor"].iloc[-1])
-            print(f"  复权因子(缓存): {factor:.4f} (可能与数据不一致)", file=sys.stderr)
+            if verbose:
+                print(f"  复权因子(缓存): {factor:.4f} (可能与数据不一致)", file=sys.stderr)
             return factor
         except Exception:
             pass
@@ -114,12 +176,15 @@ def derive_factor(code, df_hfq=None):
             os.makedirs(FACTOR_DIR, exist_ok=True)
             factor_df.to_pickle(cache_file)
             factor = float(factor_df.sort_index()["factor"].iloc[-1])
-            print(f"  复权因子(在线): {factor:.4f}", file=sys.stderr)
+            if verbose:
+                print(f"  复权因子(在线): {factor:.4f}", file=sys.stderr)
             return factor
     except Exception as e:
-        print(f"[derive_factor] 获取 {code} 复权因子失败: {type(e).__name__}: {e}", file=sys.stderr)
+        if verbose:
+            print(f"[derive_factor] 获取 {code} 复权因子失败: {type(e).__name__}: {e}", file=sys.stderr)
 
-    print(f"[derive_factor] ⚠️ {code} 复权因子获取失败，输出为后复权价格", file=sys.stderr)
+    if verbose:
+        print(f"[derive_factor] ⚠️ {code} 复权因子获取失败，输出为后复权价格", file=sys.stderr)
     return 1.0
 
 
@@ -225,15 +290,19 @@ def _sort_key_for_code(code, all_forward):
     return (category, chg_val)
 
 
-def process_single(code, predictor, fresh_cache):
-    """处理单只股票：数据获取 → 因子 → 校准 → 预测 → 回测。返回结果字典或 None。"""
+def process_single(code, predictor, fresh_cache, factor=None):
+    """处理单只股票：数据获取 → 因子 → 校准 → 预测 → 回测。返回结果字典或 None。
+
+    factor: 预计算的复权因子（由 prefetch_factors 提供），为 None 时内部推导。
+    """
     print(f"  处理 {code}...", flush=True)
     df = fresh_cache[code] if code in fresh_cache else get_data(code)
     if df is None:
         return {"code": code, "error": "数据未找到"}
 
-    factor = derive_factor(code, df)
     is_index = classify_code(code)
+    if factor is None:
+        factor = derive_factor(code, df)
     factor_ok = is_index or factor != 1.0
     if not factor_ok:
         print(f"  {code}: 复权因子获取失败，输出为后复权价格", file=sys.stderr)
@@ -249,25 +318,13 @@ def process_single(code, predictor, fresh_cache):
 
     rows, last_close_actual = run_prediction(predictor, df, factor)
 
-    # 偏差较大时自动修正预测收盘价
-    bias_applied = False
-    if abs(bias_correction) > last_close_actual * BIAS_AUTO_THRESHOLD:
-        for r in rows:
-            r["close_raw"] = r["close"]
-            r["close"] = round(r["close"] + bias_correction, 2)
-        # 重算累计涨跌幅
-        for r in rows:
-            r["cum_chg"] = (r["close"] - last_close_actual) / last_close_actual
-        bias_applied = True
-
     metrics, n_win, conf = run_backtest(predictor, df, factor)
 
     return {
         "code": code,
         "factor_ok": factor_ok,
         "forward": {"rows": rows, "base": last_close_actual,
-                     "factor": factor, "bias_correction": bias_correction,
-                     "bias_applied": bias_applied},
+                     "factor": factor, "bias_correction": bias_correction},
         "backtest": {"metrics": metrics, "windows": n_win},
         "confidence": {"conf": conf, "base": last_close_actual},
     }
@@ -480,8 +537,7 @@ def console_output(all_forward, all_bt, all_conf, all_codes, errors, all_stabili
         print(f"{'='*70}")
         print(f"  基准收盘价: {base:.2f}")
         if abs(bc) > 0.01:
-            auto_note = " [已自动修正]" if info.get("bias_applied") else ""
-            print(f"  过去一个月模型偏差值: {bc:+.2f} (正值=模型预测偏低，负值=模型预测偏高){auto_note}")
+            print(f"  过去一个月模型偏差值: {bc:+.2f} (正值=模型预测偏低，负值=模型预测偏高)")
         if code in all_stability:
             print(f"  ⚠ 预测稳定性: {all_stability[code]}")
         print(f"{'='*70}")
@@ -602,6 +658,15 @@ def main():
     # 检查并导入最新数据
     fresh_cache = {} if args.no_import else ensure_fresh_data(codes)
 
+    # 批量预取复权因子（1日缓存，因子完整后再进行后续预测）
+    print("获取复权因子...")
+    factors = prefetch_factors(codes, fresh_cache)
+    ok_count = sum(1 for _, ok in factors.values() if ok)
+    fail_codes = [c for c, (_, ok) in factors.items() if not ok]
+    if fail_codes:
+        print(f"  ⚠ {len(fail_codes)} 只股票复权因子获取失败（将输出后复权价格）: {fail_codes}")
+    print(f"  因子获取完成: {ok_count}/{len(codes)} 有效")
+
     print(f"加载微调模型...")
     predictor = load_model(device)
 
@@ -618,7 +683,8 @@ def main():
     print(f"开始预测 (股票数={len(codes)})...")
     for code in codes:
         try:
-            result = process_single(code, predictor, fresh_cache)
+            factor, _ = factors.get(code, (None, False))
+            result = process_single(code, predictor, fresh_cache, factor=factor)
         except Exception as e:
             errors.append(f"{name_map.get(code, code)} ({code}): {type(e).__name__}: {e}")
             continue
@@ -630,8 +696,7 @@ def main():
         name = name_map.get(code, code)
         fwd = result["forward"]
         all_forward[code] = {"name": name, "rows": fwd["rows"], "base": fwd["base"],
-                             "factor": fwd["factor"], "bias_correction": fwd["bias_correction"],
-                             "bias_applied": fwd.get("bias_applied", False)}
+                             "factor": fwd["factor"], "bias_correction": fwd["bias_correction"]}
         bt = result["backtest"]
         all_bt[code] = {"name": name, "metrics": bt["metrics"], "windows": bt["windows"]}
         conf = result["confidence"]
@@ -679,7 +744,6 @@ def main():
     lines.append("")
     lines.append("> 所有价格为实际市场价（已从后复权换算），已施加涨跌停约束。涨跌幅 = (预测收盘 - 基准收盘) / 基准收盘。")
     lines.append("> 分类标准：10日累计涨跌幅 >3% 为看涨，<-3% 为看跌，其余为看平。")
-    lines.append("> 偏差自动修正：模型偏差值超过基准价 5% 时自动应用修正。")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -710,9 +774,8 @@ def main():
         lines.append(f"基准收盘: **{info['base']:.2f}**")
         bc = info.get("bias_correction", 0.0)
         if abs(bc) > 0.01:
-            auto_note = " **[已自动修正]**" if info.get("bias_applied") else ""
             lines.append("")
-            lines.append(f"过去一个月模型偏差值: **{bc:+.2f}** (正值=模型预测偏低，负值=模型预测偏高){auto_note}")
+            lines.append(f"过去一个月模型偏差值: **{bc:+.2f}** (正值=模型预测偏低，负值=模型预测偏高)")
         if code in all_stability:
             lines.append("")
             lines.append(f"> ⚠ 预测稳定性告警: {all_stability[code]}")
