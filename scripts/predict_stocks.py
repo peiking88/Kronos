@@ -542,7 +542,7 @@ def save_predictions(all_forward):
     snapshot = {}
     for code, info in all_forward.items():
         if info.get("rows"):
-            snapshot[code] = round(info["rows"][-1]["cum_chg"], 4)
+            snapshot[code] = float(round(info["rows"][-1]["cum_chg"], 4))
     try:
         os.makedirs(os.path.dirname(STABILITY_CACHE), exist_ok=True)
         tmp_path = STABILITY_CACHE + ".tmp"
