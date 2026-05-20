@@ -10,6 +10,11 @@
 
 个股价格已换算为实际市场价（不复权）。指数为实际点位。
 报告按 指数→看涨→看平→看跌 排列。
+
+特性:
+    - 施加10%涨跌停约束，预测价格不会超出日涨跌停范围
+    - 模型偏差值超过基准价5%时自动修正预测收盘价
+    - 与上次预测结果对比，标注稳定性告警（预测跳变/方向翻转）
 """
 
 import argparse, os, sys, pickle, json
@@ -47,6 +52,12 @@ MAX_STALE_DAYS = 0
 # 10日涨跌幅分类阈值
 BULL_THRESHOLD = 0.03   # >3% 看涨
 BEAR_THRESHOLD = -0.03  # <-3% 看跌
+
+LIMIT_RATE = 0.10                # 涨跌停幅度
+BIAS_AUTO_THRESHOLD = 0.05       # 偏差自动修正阈值（占基准价比例）
+STABILITY_THRESHOLD = 0.15       # 预测稳定性告警阈值（累计涨跌幅变化）
+STABILITY_CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "outputs", ".pred_last.json")
 
 
 def derive_factor(code, df_hfq=None):
@@ -237,13 +248,26 @@ def process_single(code, predictor, fresh_cache):
         bias_correction = bias_correction / factor
 
     rows, last_close_actual = run_prediction(predictor, df, factor)
+
+    # 偏差较大时自动修正预测收盘价
+    bias_applied = False
+    if abs(bias_correction) > last_close_actual * BIAS_AUTO_THRESHOLD:
+        for r in rows:
+            r["close_raw"] = r["close"]
+            r["close"] = round(r["close"] + bias_correction, 2)
+        # 重算累计涨跌幅
+        for r in rows:
+            r["cum_chg"] = (r["close"] - last_close_actual) / last_close_actual
+        bias_applied = True
+
     metrics, n_win, conf = run_backtest(predictor, df, factor)
 
     return {
         "code": code,
         "factor_ok": factor_ok,
         "forward": {"rows": rows, "base": last_close_actual,
-                     "factor": factor, "bias_correction": bias_correction},
+                     "factor": factor, "bias_correction": bias_correction,
+                     "bias_applied": bias_applied},
         "backtest": {"metrics": metrics, "windows": n_win},
         "confidence": {"conf": conf, "base": last_close_actual},
     }
@@ -309,6 +333,16 @@ def ensure_fresh_data(codes):
     return result
 
 
+def apply_price_limits(rows, last_close_actual, limit_rate=LIMIT_RATE):
+    """逐日应用涨跌停约束（实际价格空间）。"""
+    lc = last_close_actual
+    for r in rows:
+        up, dn = lc * (1 + limit_rate), lc * (1 - limit_rate)
+        for col in ["open", "high", "low", "close"]:
+            r[col] = round(max(min(r[col], up), dn), 2)
+        lc = r["close"]
+
+
 def run_prediction(predictor, df, factor):
     """Forward predict next PRED_LEN days. Returns list of dicts."""
     df = df.rename(columns={"vol": "volume", "amt": "amount"})
@@ -329,6 +363,7 @@ def run_prediction(predictor, df, factor):
         sample_count=SAMPLE_COUNT, verbose=False
     )
 
+    last_close_actual = float(last_close) / factor
     rows = []
     for i, (ts, row) in enumerate(pred.iterrows()):
         o, h, l, c = row["open"], row["high"], row["low"], row["close"]
@@ -340,7 +375,9 @@ def run_prediction(predictor, df, factor):
             "close": round(c / factor, 2),
             "cum_chg": (c - last_close) / last_close,
         })
-    return rows, float(last_close) / factor
+
+    apply_price_limits(rows, last_close_actual)
+    return rows, last_close_actual
 
 
 def run_backtest(predictor, df, factor):
@@ -425,8 +462,10 @@ def format_table(rows):
     return "\n".join(lines)
 
 
-def console_output(all_forward, all_bt, all_conf, all_codes, errors):
+def console_output(all_forward, all_bt, all_conf, all_codes, errors, all_stability=None):
     """控制台格式输出：预测表格 + 涨跌统计 + 回测摘要。"""
+    if all_stability is None:
+        all_stability = {}
     for code in all_codes:
         if code not in all_forward:
             continue
@@ -441,7 +480,10 @@ def console_output(all_forward, all_bt, all_conf, all_codes, errors):
         print(f"{'='*70}")
         print(f"  基准收盘价: {base:.2f}")
         if abs(bc) > 0.01:
-            print(f"  过去一个月模型偏差值: {bc:+.2f} (正值=模型预测偏低，负值=模型预测偏高)")
+            auto_note = " [已自动修正]" if info.get("bias_applied") else ""
+            print(f"  过去一个月模型偏差值: {bc:+.2f} (正值=模型预测偏低，负值=模型预测偏高){auto_note}")
+        if code in all_stability:
+            print(f"  ⚠ 预测稳定性: {all_stability[code]}")
         print(f"{'='*70}")
         print(f"  {'日期':<14s} {'开盘':>8s} {'最高':>8s} {'最低':>8s} {'收盘':>8s} {'涨跌幅':>8s}")
         print(f"  {'-'*54}")
@@ -484,6 +526,51 @@ def console_output(all_forward, all_bt, all_conf, all_codes, errors):
             print(f"  - {e}")
 
 
+def load_last_predictions():
+    """加载上次预测结果，用于稳定性对比。返回 {code: cum_chg} 或 {}。"""
+    if not os.path.exists(STABILITY_CACHE):
+        return {}
+    try:
+        with open(STABILITY_CACHE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_predictions(all_forward):
+    """保存本次预测结果，供下次稳定性对比（原子写入）。"""
+    snapshot = {}
+    for code, info in all_forward.items():
+        if info.get("rows"):
+            snapshot[code] = round(info["rows"][-1]["cum_chg"], 4)
+    try:
+        os.makedirs(os.path.dirname(STABILITY_CACHE), exist_ok=True)
+        tmp_path = STABILITY_CACHE + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(snapshot, f)
+        os.replace(tmp_path, STABILITY_CACHE)
+    except Exception as e:
+        print(f"[save_predictions] 保存失败: {e}", file=sys.stderr)
+
+
+def check_stability(code, cum_chg, last_preds):
+    """对比上次预测，返回稳定性标签。None=稳定, str=告警描述。"""
+    if code not in last_preds:
+        return None
+    prev = last_preds[code]
+    diff = abs(cum_chg - prev)
+    if diff > STABILITY_THRESHOLD:
+        direction = "更悲观" if cum_chg < prev else "更乐观"
+        return f"预测跳变 ({prev*100:+.1f}% → {cum_chg*100:+.1f}%, {direction})"
+    # 方向翻转
+    prev_cls = classify_prediction(prev)
+    curr_cls = classify_prediction(cum_chg)
+    if prev_cls != curr_cls:
+        labels = {"bull": "看涨", "bear": "看跌", "neutral": "看平"}
+        return f"方向翻转 ({labels[prev_cls]} → {labels[curr_cls]})"
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="一键预测个股未来10日收盘价")
     parser.add_argument("codes", nargs="*", help="股票代码（可选，缺失时读取TDX自选股）")
@@ -521,7 +608,11 @@ def main():
     all_forward = {}
     all_bt = {}
     all_conf = {}
+    all_stability = {}
     errors = []
+
+    # 加载上次预测用于稳定性对比
+    last_preds = load_last_predictions()
 
     # 顺序处理
     print(f"开始预测 (股票数={len(codes)})...")
@@ -539,7 +630,8 @@ def main():
         name = name_map.get(code, code)
         fwd = result["forward"]
         all_forward[code] = {"name": name, "rows": fwd["rows"], "base": fwd["base"],
-                             "factor": fwd["factor"], "bias_correction": fwd["bias_correction"]}
+                             "factor": fwd["factor"], "bias_correction": fwd["bias_correction"],
+                             "bias_applied": fwd.get("bias_applied", False)}
         bt = result["backtest"]
         all_bt[code] = {"name": name, "metrics": bt["metrics"], "windows": bt["windows"]}
         conf = result["confidence"]
@@ -547,12 +639,21 @@ def main():
         if not result.get("factor_ok", True):
             errors.append(f"{name} ({code}): 复权因子获取失败，输出为后复权价格")
 
+        # 稳定性检查
+        final_chg = fwd["rows"][-1]["cum_chg"]
+        stab = check_stability(code, final_chg, last_preds)
+        if stab:
+            all_stability[code] = stab
+
     # 按分类排序：指数 → 看涨 → 看平 → 看跌
     sorted_codes = sorted(codes, key=lambda c: _sort_key_for_code(c, all_forward))
 
+    # 保存本次预测供下次稳定性对比
+    save_predictions(all_forward)
+
     # --- Output ---
     if args.format == "console":
-        console_output(all_forward, all_bt, all_conf, sorted_codes, errors)
+        console_output(all_forward, all_bt, all_conf, sorted_codes, errors, all_stability)
         return
 
     # --- Generate markdown report ---
@@ -576,8 +677,9 @@ def main():
     lines.append(f"**标的数**: {len(all_forward)} | "
                  f"指数 {index_count} | 看涨 {bull_count} | 看平 {neutral_count} | 看跌 {bear_count}")
     lines.append("")
-    lines.append("> 所有价格为实际市场价（已从后复权换算）。涨跌幅 = (预测收盘 - 基准收盘) / 基准收盘。")
+    lines.append("> 所有价格为实际市场价（已从后复权换算），已施加涨跌停约束。涨跌幅 = (预测收盘 - 基准收盘) / 基准收盘。")
     lines.append("> 分类标准：10日累计涨跌幅 >3% 为看涨，<-3% 为看跌，其余为看平。")
+    lines.append("> 偏差自动修正：模型偏差值超过基准价 5% 时自动应用修正。")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -608,8 +710,12 @@ def main():
         lines.append(f"基准收盘: **{info['base']:.2f}**")
         bc = info.get("bias_correction", 0.0)
         if abs(bc) > 0.01:
+            auto_note = " **[已自动修正]**" if info.get("bias_applied") else ""
             lines.append("")
-            lines.append(f"过去一个月模型偏差值: **{bc:+.2f}** (正值=模型预测偏低，负值=模型预测偏高)")
+            lines.append(f"过去一个月模型偏差值: **{bc:+.2f}** (正值=模型预测偏低，负值=模型预测偏高){auto_note}")
+        if code in all_stability:
+            lines.append("")
+            lines.append(f"> ⚠ 预测稳定性告警: {all_stability[code]}")
         lines.append("")
         lines.append(format_table(info["rows"]))
         lines.append("")
@@ -657,6 +763,19 @@ def main():
             f"{c.get('d1', 0):.2f} | {c.get('d5', 0):.2f} | {c.get('d10', 0):.2f} |"
         )
     lines.append("")
+
+    # Stability alerts
+    if all_stability:
+        lines.append("---")
+        lines.append("")
+        lines.append("## 四、预测稳定性告警")
+        lines.append("")
+        lines.append("以下标的预测结果较上次发生显著变化，请关注：")
+        lines.append("")
+        for code, msg in all_stability.items():
+            name = all_forward.get(code, {}).get("name", code)
+            lines.append(f"- **{name}** ({code}): {msg}")
+        lines.append("")
 
     # Errors
     if errors:
