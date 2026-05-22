@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-一键预测脚本 — 使用微调模型预测个股/指数未来10日走势。
+一键预测脚本 — 使用微调模型预测个股/指数未来3日走势（3次预测方向一致性校验）。
 
 用法:
     python scripts/predict_stocks.py                                # 读取TDX自选股，输出报告
     python scripts/predict_stocks.py sh600000 sz002741              # 预测个股，输出 MD 报告
     python scripts/predict_stocks.py --format console               # 读取自选股，控制台表格
-    python scripts/predict_stocks.py sh600353 -n 8                  # 8线程并发预测
+    python scripts/predict_stocks.py sh600353                       # 预测个股
 
 个股价格已换算为实际市场价（不复权）。指数为实际点位。
 报告按 指数→看涨→看平→看跌 排列。
 
 特性:
+    - 每次连续预测3次，方向一致时给出平均结果并重点标注
     - 施加10%涨跌停约束，预测价格不会超出日涨跌停范围
     - 模型偏差值仅作参考，不自动修正预测收盘价
     - 与上次预测结果对比，标注稳定性告警（预测跳变/方向翻转）
@@ -38,16 +39,15 @@ FACTOR_CACHE_1D = os.path.join(FACTOR_DIR, ".factor_1d.json")
 
 
 def prefetch_factors(codes, fresh_cache):
-    """批量获取复权因子（1日缓存）。
+    """批量获取复权因子（1日缓存），完成后检查完整性。
 
-    先检查本地 JSON 缓存（当日有效），命中则跳过 derive_factor 的网络/TDX 读取。
-    因子完整后再返回，供后续预测使用。
+    先检查本地 JSON 缓存（当日有效），命中则跳过网络/TDX 读取。
+    因子获取失败不写入缓存，下次重试。
 
     返回: {code: (factor: float, ok: bool)}
-        ok=True  因子有效（非 1.0 或是指数）
-        ok=False 因子获取失败，需用后复权价格输出
+        ok=True  因子有效（含指数和因子确实为 1.0 的个股）
+        ok=False 获取失败，需用后复权价格输出
     """
-    # 读取 1 日缓存
     cache = {}
     if os.path.exists(FACTOR_CACHE_1D):
         try:
@@ -58,9 +58,11 @@ def prefetch_factors(codes, fresh_cache):
     today_str = str(datetime.now().date())
 
     result = {}
+    failed = []
+
     for code in codes:
-        # 指数直接跳过
-        if classify_code(code):
+        # 指数类无需因子
+        if is_index_like(code):
             result[code] = (1.0, True)
             continue
 
@@ -68,7 +70,7 @@ def prefetch_factors(codes, fresh_cache):
         cached = cache.get(code)
         if cached and cached.get("date") == today_str:
             factor = cached["factor"]
-            ok = factor != 1.0
+            ok = cached.get("ok", factor != 1.0)
             result[code] = (factor, ok)
             print(f"  {code}: 复权因子(1日缓存)={factor:.4f}")
             continue
@@ -77,14 +79,19 @@ def prefetch_factors(codes, fresh_cache):
         df = fresh_cache.get(code) if fresh_cache else None
         if df is None:
             df = get_data(code)
-        factor = derive_factor(code, df, verbose=False) if df is not None else 1.0
-        ok = factor != 1.0
+        if df is not None:
+            factor, ok = derive_factor(code, df, verbose=False)
+        else:
+            factor, ok = 1.0, False
+
         result[code] = (factor, ok)
 
-        # 写入缓存
-        cache[code] = {"factor": factor, "date": today_str}
+        if ok:
+            cache[code] = {"factor": factor, "date": today_str, "ok": True}
+        else:
+            failed.append(code)
 
-    # 持久化缓存
+    # 持久化缓存（仅成功项）
     os.makedirs(FACTOR_DIR, exist_ok=True)
     try:
         with open(FACTOR_CACHE_1D, "w") as f:
@@ -92,14 +99,43 @@ def prefetch_factors(codes, fresh_cache):
     except Exception:
         pass
 
+    # ── 完整性报告 ──
+    total = len(codes)
+    idx_count = sum(1 for c in codes if is_index_like(c))
+    stk_count = total - idx_count
+    ok_count = sum(1 for _, ok in result.values() if ok)
+    fail_count = stk_count - (ok_count - idx_count)
+
+    print(f"  因子获取完成: {total} 标的")
+    print(f"    指数(无需因子): {idx_count}")
+    print(f"    个股成功: {stk_count - fail_count}/{stk_count}"
+          + (f"  ⚠ 失败: {failed}" if failed else "  ✓ 全部成功"))
+    if failed:
+        print(f"    失败标的将使用后复权价格输出")
+
     return result
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tdx_import", "1d")
 SSE_DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tdx_import_sse", "1d", "data.pkl")
 MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "tdx_finetune")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _report_version():
+    """从 git tag 获取报告版本号，回退到硬编码版本。"""
+    try:
+        import subprocess
+        tag = subprocess.check_output(
+            ["git", "describe", "--tags", "--abbrev=0"],
+            cwd=REPO_ROOT, stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        return tag
+    except Exception:
+        return "1.6.1"
 
 LOOKBACK = 90
-PRED_LEN = 10
+PRED_LEN = 3
+N_RUNS = 3                       # 连续预测次数，方向一致时取平均
 T = 0.6
 TOP_P = 0.9
 SAMPLE_COUNT = 5
@@ -109,7 +145,7 @@ TDX_DIR = os.path.expanduser("~/.local/share/tdxcfv/drive_c/tc/")
 ZXG_BLK = os.path.expanduser("~/.local/share/tdxcfv/drive_c/tc/T0002/blocknew/zxg.blk")
 MAX_STALE_DAYS = 0
 
-# 10日涨跌幅分类阈值
+# 3日涨跌幅分类阈值
 BULL_THRESHOLD = 0.03   # >3% 看涨
 BEAR_THRESHOLD = -0.03  # <-3% 看跌
 
@@ -123,15 +159,16 @@ STABILITY_CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(_
 def derive_factor(code, df_hfq=None, verbose=True):
     """从数据本身推导复权因子，确保与训练/推理数据一致。
 
-    核心问题：factor cache 可能被重新计算，导致与 pkl 数据中实际使用的
-    factor 不一致（如 sh600353 cache=18.60 vs 隐含=10.71，偏差 42%）。
+    推导方式（优先级）：hfq收盘/TDX原始收盘 → 本地pkl缓存 → 在线获取。
 
-    推导方式：hfq 收盘价 / TDX 原始收盘价 = 因子（保证一致性）。
-    回退：本地缓存 → 在线获取 → 1.0。
+    Returns:
+        (factor: float, ok: bool)
+        ok=True  因子获取成功（含因子确实为 1.0 的情况）
+        ok=False 获取失败，回退为 1.0，需用后复权价格输出
     """
-    # 指数无需复权因子
-    if classify_code(code):
-        return 1.0
+    # 指数类无需复权因子
+    if is_index_like(code):
+        return 1.0, True
 
     # 方法1：从 hfq 数据与 TDX 原始数据对比推导（最可靠）
     if df_hfq is not None and not df_hfq.empty:
@@ -149,7 +186,7 @@ def derive_factor(code, df_hfq=None, verbose=True):
                         factor = hfq_close / raw_close
                         if verbose:
                             print(f"  复权因子(推导): {factor:.4f} (hfq={hfq_close:.2f} / raw={raw_close:.2f})")
-                        return factor
+                        return factor, True
         except Exception:
             pass
 
@@ -162,7 +199,7 @@ def derive_factor(code, df_hfq=None, verbose=True):
             factor = float(f.sort_index()["factor"].iloc[-1])
             if verbose:
                 print(f"  复权因子(缓存): {factor:.4f} (可能与数据不一致)", file=sys.stderr)
-            return factor
+            return factor, True
         except Exception:
             pass
 
@@ -178,14 +215,14 @@ def derive_factor(code, df_hfq=None, verbose=True):
             factor = float(factor_df.sort_index()["factor"].iloc[-1])
             if verbose:
                 print(f"  复权因子(在线): {factor:.4f}", file=sys.stderr)
-            return factor
+            return factor, True
     except Exception as e:
         if verbose:
             print(f"[derive_factor] 获取 {code} 复权因子失败: {type(e).__name__}: {e}", file=sys.stderr)
 
     if verbose:
         print(f"[derive_factor] ⚠️ {code} 复权因子获取失败，输出为后复权价格", file=sys.stderr)
-    return 1.0
+    return 1.0, False
 
 
 def get_data(code):
@@ -261,12 +298,19 @@ def fetch_stock_names(codes):
 
 
 def classify_code(code):
-    """判断是否为指数代码。"""
+    """判断是否为指数代码（上证/深证/创业板）。"""
     return code.startswith("sh000") or code.startswith("sh999") or code.startswith("sz399")
 
 
+def is_index_like(code):
+    """判断是否为指数类标的（含板块指数），此类不需要复权因子。"""
+    return (code.startswith("sh000") or code.startswith("sh999")
+            or code.startswith("sz399") or code.startswith("sh880")
+            or code.startswith("sz880") or code.startswith("sh881"))
+
+
 def classify_prediction(cum_chg):
-    """根据10日累计涨跌幅分类：bull / neutral / bear。"""
+    """根据3日累计涨跌幅分类：bull / neutral / bear。"""
     if cum_chg > BULL_THRESHOLD:
         return "bull"
     elif cum_chg < BEAR_THRESHOLD:
@@ -300,10 +344,11 @@ def process_single(code, predictor, fresh_cache, factor=None):
     if df is None:
         return {"code": code, "error": "数据未找到"}
 
-    is_index = classify_code(code)
+    is_index = is_index_like(code)
     if factor is None:
-        factor = derive_factor(code, df)
-    factor_ok = is_index or factor != 1.0
+        factor, factor_ok = derive_factor(code, df)
+    else:
+        factor_ok = is_index or factor != 1.0
     if not factor_ok:
         print(f"  {code}: 复权因子获取失败，输出为后复权价格", file=sys.stderr)
 
@@ -316,15 +361,18 @@ def process_single(code, predictor, fresh_cache, factor=None):
     if factor_ok:
         bias_correction = bias_correction / factor
 
-    rows, last_close_actual = run_prediction(predictor, df, factor)
+    avg_rows, all_runs_data, consistent, directions, last_close_actual = \
+        run_prediction_multi(predictor, df, factor)
 
     metrics, n_win, conf = run_backtest(predictor, df, factor)
 
     return {
         "code": code,
         "factor_ok": factor_ok,
-        "forward": {"rows": rows, "base": last_close_actual,
-                     "factor": factor, "bias_correction": bias_correction},
+        "forward": {"rows": avg_rows, "base": last_close_actual,
+                     "factor": factor, "bias_correction": bias_correction,
+                     "consistent": consistent, "directions": directions,
+                     "all_runs": all_runs_data},
         "backtest": {"metrics": metrics, "windows": n_win},
         "confidence": {"conf": conf, "base": last_close_actual},
     }
@@ -357,9 +405,9 @@ def ensure_fresh_data(codes):
     from scripts.tdx_import import TdxDataImporter
     result = {}
 
-    # 分组：指数不复权，个股后复权
-    idx_codes = [c for c in stale_codes if classify_code(c)]
-    stk_codes = [c for c in stale_codes if not classify_code(c)]
+    # 分组：指数/板块指数不复权，个股后复权
+    idx_codes = [c for c in stale_codes if is_index_like(c)]
+    stk_codes = [c for c in stale_codes if not is_index_like(c)]
 
     for group, dtype in [(stk_codes, "back"), (idx_codes, "none")]:
         if not group:
@@ -437,6 +485,53 @@ def run_prediction(predictor, df, factor):
     return rows, last_close_actual
 
 
+def run_prediction_multi(predictor, df, factor, n_runs=N_RUNS):
+    """连续运行 n_runs 次预测，检查方向一致性，返回平均结果。
+
+    Returns:
+        avg_rows: 平均预测行列表（方向一致时用于展示）
+        all_runs_data: [(rows, last_close_actual), ...] 每次运行的原始结果
+        consistent: bool，方向是否一致
+        directions: [str, ...] 每次运行的方向分类
+        last_close_actual: 基准收盘价（实际价格空间）
+    """
+    all_runs_data = []
+    for run_i in range(n_runs):
+        print(f"    第 {run_i + 1}/{n_runs} 次预测...", end="", flush=True)
+        rows, last_close = run_prediction(predictor, df, factor)
+        all_runs_data.append((rows, last_close))
+        direction = classify_prediction(rows[-1]["cum_chg"])
+        label = {"bull": "看涨", "bear": "看跌", "neutral": "看平"}[direction]
+        print(f" {label} ({rows[-1]['cum_chg'] * 100:+.2f}%)")
+
+    directions = [classify_prediction(r[-1]["cum_chg"]) for r, _ in all_runs_data]
+    consistent = len(set(directions)) == 1
+    last_close_actual = all_runs_data[0][1]
+
+    # 计算平均价格
+    avg_rows = []
+    for i in range(PRED_LEN):
+        avg_row = {}
+        for key in ["open", "high", "low", "close"]:
+            vals = [r[i][key] for r, _ in all_runs_data]
+            avg_row[key] = round(sum(vals) / n_runs, 2)
+        avg_row["date"] = all_runs_data[0][0][i]["date"]
+        avg_row["cum_chg"] = (avg_row["close"] - last_close_actual) / last_close_actual
+        avg_rows.append(avg_row)
+
+    # 重新施加涨跌停约束（平均后可能略微超出）
+    apply_price_limits(avg_rows, last_close_actual)
+
+    if consistent:
+        print(f"    ✓ 方向一致 ({label})，使用平均结果")
+    else:
+        dirs_str = ", ".join({"bull": "看涨", "bear": "看跌", "neutral": "看平"}[d]
+                             for d in directions)
+        print(f"    ⚠ 方向不一致: {dirs_str}")
+
+    return avg_rows, all_runs_data, consistent, directions, last_close_actual
+
+
 def run_backtest(predictor, df, factor):
     """Rolling backtest. Returns list of dicts."""
     df = df.rename(columns={"vol": "volume", "amt": "amount"})
@@ -478,7 +573,7 @@ def run_backtest(predictor, df, factor):
     r = pd.DataFrame(results)
     n_win = len(r) // PRED_LEN
     metrics = {}
-    for d in [1, 3, 5, 7, 10]:
+    for d in [1, 2, 3]:
         day = r[r["day"] == d]
         if len(day) == 0:
             continue
@@ -491,36 +586,47 @@ def run_backtest(predictor, df, factor):
             "lt3": (ape < 0.03).mean(), "lt5": (ape < 0.05).mean(),
             "dir": dr, "hi_cov": hc, "lo_cov": lc,
         }
-    # Convert actual prices for confidence intervals
-    day1 = r[r["day"] == 1]
-    day5 = r[r["day"] == 5]
-    day10 = r[r["day"] == 10]
+    # 中位误差（实际价格空间）
     conf = {}
-    if len(day1) > 0:
-        conf["d1"] = float(np.median(np.abs(day1["pc_hfq"] - day1["ac_hfq"]))) / factor
-    if len(day5) > 0:
-        conf["d5"] = float(np.median(np.abs(day5["pc_hfq"] - day5["ac_hfq"]))) / factor
-    if len(day10) > 0:
-        conf["d10"] = float(np.median(np.abs(day10["pc_hfq"] - day10["ac_hfq"]))) / factor
+    for d in [1, 2, 3]:
+        day_d = r[r["day"] == d]
+        if len(day_d) > 0:
+            conf[f"d{d}"] = float(np.median(np.abs(day_d["pc_hfq"] - day_d["ac_hfq"]))) / factor
 
     return metrics, n_win, conf
 
 
-def format_table(rows):
-    """Format prediction rows as markdown table."""
-    lines = []
-    lines.append("| 日期 | 开盘 | 最高 | 最低 | 收盘 | 累计涨跌 |")
-    lines.append("|---|---|---|---|---|---|")
-    for r in rows:
-        lines.append(
-            f"| {r['date']} | {r['open']:.2f} | {r['high']:.2f} | "
-            f"{r['low']:.2f} | {r['close']:.2f} | {r['cum_chg']*100:+.2f}% |"
-        )
+def format_table(rows, metrics=None, conf=None):
+    """Format prediction rows as markdown table, with optional backtest metrics and confidence."""
+    has_m = metrics is not None
+    has_c = conf is not None
+    header = "| 日期 | 开盘 | 最高 | 最低 | 收盘 | 累计涨跌 |"
+    sep = "|---|---|---|---|---|---|"
+    if has_m:
+        header += " MAPE | MdAPE | <3% | 方向 |"
+        sep += "---|---|---|---|"
+    if has_c:
+        header += " 中位误差 |"
+        sep += "---|"
+    lines = [header, sep]
+    for i, r in enumerate(rows):
+        day = i + 1
+        row = (f"| {r['date']} | {r['open']:.2f} | {r['high']:.2f} | "
+               f"{r['low']:.2f} | {r['close']:.2f} | {r['cum_chg']*100:+.2f}% |")
+        if has_m and day in metrics:
+            m = metrics[day]
+            row += f" {m['mape']:.1%} | {m['mdape']:.1%} | {m['lt3']:.0%} | {m['dir']:.0%} |"
+        elif has_m:
+            row += " — | — | — | — |"
+        if has_c:
+            err = conf.get(f"d{day}", None)
+            row += f" ±{err:.2f} |" if err is not None else " — |"
+        lines.append(row)
     return "\n".join(lines)
 
 
 def console_output(all_forward, all_bt, all_conf, all_codes, errors, all_stability=None):
-    """控制台格式输出：预测表格 + 涨跌统计 + 回测摘要。"""
+    """控制台格式输出：预测表格 + 方向一致性 + 涨跌统计 + 回测摘要。"""
     if all_stability is None:
         all_stability = {}
     for code in all_codes:
@@ -531,6 +637,9 @@ def console_output(all_forward, all_bt, all_conf, all_codes, errors, all_stabili
         base = info["base"]
         bc = info.get("bias_correction", 0.0)
         pred_len = len(rows)
+        consistent = info.get("consistent", False)
+        directions = info.get("directions", [])
+        all_runs = info.get("all_runs", [])
 
         print(f"\n{'='*70}")
         print(f"  {info['name']} ({code}) 走势预测")
@@ -540,6 +649,21 @@ def console_output(all_forward, all_bt, all_conf, all_codes, errors, all_stabili
             print(f"  过去一个月模型偏差值: {bc:+.2f} (正值=模型预测偏低，负值=模型预测偏高)")
         if code in all_stability:
             print(f"  ⚠ 预测稳定性: {all_stability[code]}")
+
+        # 方向一致性
+        if not classify_code(code):
+            if consistent:
+                d = directions[0]
+                label = {"bull": "看涨", "bear": "看跌", "neutral": "看平"}[d]
+                print(f"  ★ 方向一致 (3/3): {label}")
+            else:
+                dirs_str = ", ".join(
+                    {"bull": "看涨", "bear": "看跌", "neutral": "看平"}[d] for d in directions
+                )
+                print(f"  ⚠ 方向分歧: {dirs_str}")
+                for i, (rows_run, _) in enumerate(all_runs):
+                    print(f"     #{i + 1}: {rows_run[-1]['cum_chg'] * 100:+.2f}%")
+
         print(f"{'='*70}")
         print(f"  {'日期':<14s} {'开盘':>8s} {'最高':>8s} {'最低':>8s} {'收盘':>8s} {'涨跌幅':>8s}")
         print(f"  {'-'*54}")
@@ -571,10 +695,12 @@ def console_output(all_forward, all_bt, all_conf, all_codes, errors, all_stabili
         # 回测指标摘要
         if code in all_bt and all_bt[code]["metrics"]:
             m = all_bt[code]["metrics"]
-            if 5 in m:
-                print(f"  回测 D5 MAPE: {m[5]['mape']:.1%}  方向准确率: {m[5]['dir']:.0%}")
-            if 10 in m:
-                print(f"  回测 D10 MAPE: {m[10]['mape']:.1%}  方向准确率: {m[10]['dir']:.0%}")
+            if 1 in m:
+                print(f"  回测 D1 MAPE: {m[1]['mape']:.1%}  方向准确率: {m[1]['dir']:.0%}")
+            if 2 in m:
+                print(f"  回测 D2 MAPE: {m[2]['mape']:.1%}  方向准确率: {m[2]['dir']:.0%}")
+            if 3 in m:
+                print(f"  回测 D3 MAPE: {m[3]['mape']:.1%}  方向准确率: {m[3]['dir']:.0%}")
 
     if errors:
         print(f"\n错误:")
@@ -628,7 +754,7 @@ def check_stability(code, cum_chg, last_preds):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="一键预测个股未来10日收盘价")
+    parser = argparse.ArgumentParser(description="一键预测个股未来3日收盘价（3次预测方向一致性校验）")
     parser.add_argument("codes", nargs="*", help="股票代码（可选，缺失时读取TDX自选股）")
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument("-o", "--output", default=None, help="输出文件路径（默认自动生成）")
@@ -658,14 +784,9 @@ def main():
     # 检查并导入最新数据
     fresh_cache = {} if args.no_import else ensure_fresh_data(codes)
 
-    # 批量预取复权因子（1日缓存，因子完整后再进行后续预测）
+    # 批量预取复权因子（1日缓存，含完整性检查）
     print("获取复权因子...")
     factors = prefetch_factors(codes, fresh_cache)
-    ok_count = sum(1 for _, ok in factors.values() if ok)
-    fail_codes = [c for c, (_, ok) in factors.items() if not ok]
-    if fail_codes:
-        print(f"  ⚠ {len(fail_codes)} 只股票复权因子获取失败（将输出后复权价格）: {fail_codes}")
-    print(f"  因子获取完成: {ok_count}/{len(codes)} 有效")
 
     print(f"加载微调模型...")
     predictor = load_model(device)
@@ -696,7 +817,10 @@ def main():
         name = name_map.get(code, code)
         fwd = result["forward"]
         all_forward[code] = {"name": name, "rows": fwd["rows"], "base": fwd["base"],
-                             "factor": fwd["factor"], "bias_correction": fwd["bias_correction"]}
+                             "factor": fwd["factor"], "bias_correction": fwd["bias_correction"],
+                             "consistent": fwd.get("consistent", False),
+                             "directions": fwd.get("directions", []),
+                             "all_runs": fwd.get("all_runs", [])}
         bt = result["backtest"]
         all_bt[code] = {"name": name, "metrics": bt["metrics"], "windows": bt["windows"]}
         conf = result["confidence"]
@@ -734,16 +858,22 @@ def main():
                         and classify_prediction(all_forward[c]["rows"][-1]["cum_chg"]) == "neutral")
     bear_count = sum(1 for c in sorted_codes if not classify_code(c) and c in all_forward
                      and classify_prediction(all_forward[c]["rows"][-1]["cum_chg"]) == "bear")
+    consistent_count = sum(1 for c in sorted_codes if c in all_forward
+                           and all_forward[c].get("consistent", False))
 
     title = "自选股" if from_zxg else "个股"
-    lines.append(f"# {title}未来10日收盘价预测报告")
+    lines.append(f"# {title}未来3日收盘价预测报告")
     lines.append("")
     lines.append(f"**时间**: {now} | **模型**: Kronos-base TDX后复权微调版 | **基准日**: 最近交易日")
+    lines.append(f"**版本**: {_report_version()}")
     lines.append(f"**标的数**: {len(all_forward)} | "
                  f"指数 {index_count} | 看涨 {bull_count} | 看平 {neutral_count} | 看跌 {bear_count}")
+    lines.append(f"**方向一致**: {consistent_count}/{max(1, len(all_forward) - index_count)} "
+                 f"({consistent_count / max(1, len(all_forward) - index_count) * 100:.0f}%)")
     lines.append("")
     lines.append("> 所有价格为实际市场价（已从后复权换算），已施加涨跌停约束。涨跌幅 = (预测收盘 - 基准收盘) / 基准收盘。")
-    lines.append("> 分类标准：10日累计涨跌幅 >3% 为看涨，<-3% 为看跌，其余为看平。")
+    lines.append("> 分类标准：3日累计涨跌幅 >3% 为看涨，<-3% 为看跌，其余为看平。")
+    lines.append("> 每只标的连续预测3次，方向一致(3/3)时取平均结果并 ★ 标注。")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -764,12 +894,28 @@ def main():
             lines.append("")
         info = all_forward[code]
         final = info["rows"][-1]
+        consistent = info.get("consistent", False)
+        directions = info.get("directions", [])
+        all_runs = info.get("all_runs", [])
+
         cls_tag = ""
         if not classify_code(code):
             cls = classify_prediction(final["cum_chg"])
             cls_labels = {"bull": "看涨", "bear": "看跌"}
             cls_tag = f" [{cls_labels.get(cls, '')}]" if cls in cls_labels else ""
-        lines.append(f"#### {info['name']} ({code}){cls_tag}")
+
+        # 方向一致性标注
+        consistency_mark = ""
+        if not classify_code(code):
+            if consistent:
+                consistency_mark = " ★ 方向一致"
+            else:
+                dirs_str = " → ".join(
+                    {"bull": "看涨", "bear": "看跌", "neutral": "看平"}[d] for d in directions
+                )
+                consistency_mark = f" ⚠ 方向分歧({dirs_str})"
+
+        lines.append(f"#### {info['name']} ({code}){cls_tag}{consistency_mark}")
         lines.append("")
         lines.append(f"基准收盘: **{info['base']:.2f}**")
         bc = info.get("bias_correction", 0.0)
@@ -779,59 +925,39 @@ def main():
         if code in all_stability:
             lines.append("")
             lines.append(f"> ⚠ 预测稳定性告警: {all_stability[code]}")
-        lines.append("")
-        lines.append(format_table(info["rows"]))
-        lines.append("")
-        lines.append(f"10日涨跌: **{final['cum_chg']*100:+.2f}%** → 终点 **{final['close']:.2f}**")
-        lines.append("")
 
-    # Accuracy
-    lines.append("---")
-    lines.append("")
-    lines.append("## 二、准确度（历史回测）")
-    lines.append("")
-    for code in sorted_codes:
-        if code not in all_bt:
-            continue
-        info = all_bt[code]
-        lines.append(f"### {info['name']} ({code})  — {info['windows']} 个窗口")
-        lines.append("")
-        lines.append("| 周期 | MAPE | MdAPE | <3% | <5% | 方向 | 高覆盖 | 低覆盖 |")
-        lines.append("|---|---|---|---|---|---|---|---|")
-        for d in [1, 3, 5, 7, 10]:
-            if d not in info["metrics"]:
-                continue
-            m = info["metrics"][d]
-            lines.append(
-                f"| D{d:2d} | {m['mape']:.1%} | {m['mdape']:.1%} | "
-                f"{m['lt3']:.0%} | {m['lt5']:.0%} | {m['dir']:.0%} | "
-                f"{m['hi_cov']:.0%} | {m['lo_cov']:.0%} |"
-            )
-        lines.append("")
+        # 方向分歧时显示每次运行的详情
+        if not consistent and all_runs and not classify_code(code):
+            lines.append("")
+            lines.append("| 运行 | 方向 | 3日涨跌 |")
+            lines.append("|---|---|---|")
+            for i, (rows, _) in enumerate(all_runs):
+                d = directions[i]
+                label = {"bull": "看涨", "bear": "看跌", "neutral": "看平"}[d]
+                chg = rows[-1]["cum_chg"] * 100
+                lines.append(f"| #{i + 1} | {label} | {chg:+.2f}% |")
 
-    # Confidence intervals
-    lines.append("---")
-    lines.append("")
-    lines.append("## 三、预测置信区间（中位误差）")
-    lines.append("")
-    lines.append("| 标的 | D1 ± | D5 ± | D10 ± |")
-    lines.append("|---|---|---|---|")
-    for code in sorted_codes:
-        if code not in all_conf:
-            continue
-        info = all_conf[code]
-        c = info["conf"]
-        lines.append(
-            f"| {info['name']} | "
-            f"{c.get('d1', 0):.2f} | {c.get('d5', 0):.2f} | {c.get('d10', 0):.2f} |"
-        )
-    lines.append("")
+        lines.append("")
+        bt_metrics = all_bt.get(code, {}).get("metrics") if code in all_bt else None
+        conf_data = all_conf.get(code, {}).get("conf") if code in all_conf else None
+        n_win = all_bt.get(code, {}).get("windows", 0)
+
+        lines.append(format_table(info["rows"], metrics=bt_metrics, conf=conf_data))
+        if bt_metrics and n_win:
+            lines.append(f"> 回测窗口: {n_win}")
+        lines.append("")
+        # 方向一致时重点标注
+        if consistent and not classify_code(code):
+            lines.append(f"**3日涨跌: {final['cum_chg'] * 100:+.2f}% → 终点 {final['close']:.2f}**")
+        else:
+            lines.append(f"3日涨跌: **{final['cum_chg'] * 100:+.2f}%** → 终点 **{final['close']:.2f}**")
+        lines.append("")
 
     # Stability alerts
     if all_stability:
         lines.append("---")
         lines.append("")
-        lines.append("## 四、预测稳定性告警")
+        lines.append("## 二、预测稳定性告警")
         lines.append("")
         lines.append("以下标的预测结果较上次发生显著变化，请关注：")
         lines.append("")
