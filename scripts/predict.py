@@ -26,6 +26,10 @@ import numpy as np
 import pandas as pd
 import torch
 
+# Pre-import mootdx/opentdx before sys.path modification to avoid
+# namespace package conflict with ~/peiking88/opentdx/ directory.
+import mootdx  # noqa: F401
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from model import Kronos, KronosTokenizer, KronosPredictor
 from scripts.calibrate import backtest_calibrate
@@ -209,7 +213,7 @@ def main():
                "  python scripts/predict.py --pred-len 60 --model base 600000\n",
     )
     parser.add_argument("symbols", nargs="+", help="股票代码，如 600000 002741 sh000001")
-    parser.add_argument("--pred-len", type=int, default=30, help="预测交易日数 (默认 30)")
+    parser.add_argument("--pred-len", type=int, default=5, help="预测交易日数 (默认 5)")
     parser.add_argument("--model", choices=MODEL_MAP.keys(), default="base",
                         help="模型大小: mini/small/base (默认 small)")
     parser.add_argument("--device", default="cpu", help="计算设备 (默认 cpu)")

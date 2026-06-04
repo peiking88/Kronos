@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-一键预测脚本 — 使用微调模型预测个股/指数未来10日走势。
+一键预测脚本 — 使用微调模型预测个股/指数未来5日走势。
 
 用法:
     python scripts/predict_stocks.py                                # 读取TDX自选股，输出报告
@@ -99,7 +99,7 @@ SSE_DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "tdx_finetune")
 
 LOOKBACK = 90
-PRED_LEN = 10
+PRED_LEN = 5
 T = 0.6
 TOP_P = 0.9
 SAMPLE_COUNT = 5
@@ -478,7 +478,7 @@ def run_backtest(predictor, df, factor):
     r = pd.DataFrame(results)
     n_win = len(r) // PRED_LEN
     metrics = {}
-    for d in [1, 3, 5, 7, 10]:
+    for d in range(1, PRED_LEN + 1):
         day = r[r["day"] == d]
         if len(day) == 0:
             continue
@@ -491,31 +491,50 @@ def run_backtest(predictor, df, factor):
             "lt3": (ape < 0.03).mean(), "lt5": (ape < 0.05).mean(),
             "dir": dr, "hi_cov": hc, "lo_cov": lc,
         }
-    # Convert actual prices for confidence intervals
-    day1 = r[r["day"] == 1]
-    day5 = r[r["day"] == 5]
-    day10 = r[r["day"] == 10]
+    # Convert actual prices for confidence intervals (per day)
     conf = {}
-    if len(day1) > 0:
-        conf["d1"] = float(np.median(np.abs(day1["pc_hfq"] - day1["ac_hfq"]))) / factor
-    if len(day5) > 0:
-        conf["d5"] = float(np.median(np.abs(day5["pc_hfq"] - day5["ac_hfq"]))) / factor
-    if len(day10) > 0:
-        conf["d10"] = float(np.median(np.abs(day10["pc_hfq"] - day10["ac_hfq"]))) / factor
+    for d in range(1, PRED_LEN + 1):
+        day_r = r[r["day"] == d]
+        if len(day_r) > 0:
+            conf[f"d{d}"] = float(np.median(np.abs(day_r["pc_hfq"] - day_r["ac_hfq"]))) / factor
 
     return metrics, n_win, conf
 
 
-def format_table(rows):
-    """Format prediction rows as markdown table."""
-    lines = []
-    lines.append("| 日期 | 开盘 | 最高 | 最低 | 收盘 | 累计涨跌 |")
-    lines.append("|---|---|---|---|---|---|")
-    for r in rows:
-        lines.append(
+def format_table(rows, metrics=None, conf=None):
+    """Format prediction rows as markdown table with merged accuracy."""
+    has_metrics = metrics and len(metrics) > 0
+    has_conf = conf and len(conf) > 0
+
+    header = "| 日期 | 开盘 | 最高 | 最低 | 收盘 | 累计涨跌 |"
+    sep    = "|---|---|---|---|---|---|"
+    if has_metrics:
+        header += " MAPE | 准确率 | 高覆盖 | 低覆盖 |"
+        sep    += "---|---|---|---|"
+    if has_conf:
+        header += " 置信± |"
+        sep    += "---|"
+
+    lines = [header, sep]
+    for i, r in enumerate(rows):
+        day = i + 1
+        line = (
             f"| {r['date']} | {r['open']:.2f} | {r['high']:.2f} | "
             f"{r['low']:.2f} | {r['close']:.2f} | {r['cum_chg']*100:+.2f}% |"
         )
+        if has_metrics and day in metrics:
+            m = metrics[day]
+            line += f" {m['mape']:.1%} | {m['dir']:.0%} | {m['hi_cov']:.0%} | {m['lo_cov']:.0%} |"
+        elif has_metrics:
+            line += " — | — | — | — |"
+        if has_conf:
+            # D1→d1, D5→d5, etc. fallback to nearest available
+            key = f"d{day}"
+            if key in conf:
+                line += f" {conf[key]:.2f} |"
+            else:
+                line += " — |"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -531,6 +550,7 @@ def console_output(all_forward, all_bt, all_conf, all_codes, errors, all_stabili
         base = info["base"]
         bc = info.get("bias_correction", 0.0)
         pred_len = len(rows)
+        bt_metrics = all_bt[code]["metrics"] if code in all_bt else {}
 
         print(f"\n{'='*70}")
         print(f"  {info['name']} ({code}) 走势预测")
@@ -541,15 +561,21 @@ def console_output(all_forward, all_bt, all_conf, all_codes, errors, all_stabili
         if code in all_stability:
             print(f"  ⚠ 预测稳定性: {all_stability[code]}")
         print(f"{'='*70}")
-        print(f"  {'日期':<14s} {'开盘':>8s} {'最高':>8s} {'最低':>8s} {'收盘':>8s} {'涨跌幅':>8s}")
-        print(f"  {'-'*54}")
+
+        # Table header — always show accuracy columns
+        print(f"  {'日期':<14s} {'开盘':>8s} {'最高':>8s} {'最低':>8s} {'收盘':>8s} {'涨跌幅':>8s} {'MAPE':>7s} {'准确率':>6s}")
+        print(f"  {'-'*75}")
 
         for i, r in enumerate(rows):
             prev = base if i == 0 else rows[i-1]["close"]
             daily_chg = (r["close"] - prev) / prev * 100
+            day = i + 1
+            mape_str = f"{bt_metrics[day]['mape']:>6.1%}" if day in bt_metrics else "     —"
+            dir_str  = f"{bt_metrics[day]['dir']:>5.0%}" if day in bt_metrics else "    —"
             print(f"  {str(r['date']):<14s} "
                   f"{r['open']:>8.2f} {r['high']:>8.2f} "
-                  f"{r['low']:>8.2f} {r['close']:>8.2f} {daily_chg:>+7.2f}%")
+                  f"{r['low']:>8.2f} {r['close']:>8.2f} {daily_chg:>+7.2f}% "
+                  f"{mape_str} {dir_str}")
 
         final = rows[-1]
         total_chg = (final["close"] - base) / base * 100
@@ -567,14 +593,6 @@ def console_output(all_forward, all_bt, all_conf, all_codes, errors, all_stabili
         print(f"\n  涨跌统计: {up_days}涨 / {down_days}跌")
         print(f"  预测区间: {pred_low:.2f} ~ {pred_high:.2f}")
         print(f"  波动幅度: {(pred_high - pred_low) / base * 100:.2f}%")
-
-        # 回测指标摘要
-        if code in all_bt and all_bt[code]["metrics"]:
-            m = all_bt[code]["metrics"]
-            if 5 in m:
-                print(f"  回测 D5 MAPE: {m[5]['mape']:.1%}  方向准确率: {m[5]['dir']:.0%}")
-            if 10 in m:
-                print(f"  回测 D10 MAPE: {m[10]['mape']:.1%}  方向准确率: {m[10]['dir']:.0%}")
 
     if errors:
         print(f"\n错误:")
@@ -628,7 +646,7 @@ def check_stability(code, cum_chg, last_preds):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="一键预测个股未来10日收盘价")
+    parser = argparse.ArgumentParser(description="一键预测个股未来5日收盘价")
     parser.add_argument("codes", nargs="*", help="股票代码（可选，缺失时读取TDX自选股）")
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument("-o", "--output", default=None, help="输出文件路径（默认自动生成）")
@@ -736,7 +754,7 @@ def main():
                      and classify_prediction(all_forward[c]["rows"][-1]["cum_chg"]) == "bear")
 
     title = "自选股" if from_zxg else "个股"
-    lines.append(f"# {title}未来10日收盘价预测报告")
+    lines.append(f"# {title}未来5日收盘价预测报告")
     lines.append("")
     lines.append(f"**时间**: {now} | **模型**: Kronos-base TDX后复权微调版 | **基准日**: 最近交易日")
     lines.append(f"**标的数**: {len(all_forward)} | "
@@ -780,58 +798,31 @@ def main():
             lines.append("")
             lines.append(f"> ⚠ 预测稳定性告警: {all_stability[code]}")
         lines.append("")
-        lines.append(format_table(info["rows"]))
+        bt_metrics = all_bt[code]["metrics"] if code in all_bt else None
+        bt_conf = all_conf[code]["conf"] if code in all_conf else None
+        lines.append(format_table(info["rows"], metrics=bt_metrics, conf=bt_conf))
         lines.append("")
-        lines.append(f"10日涨跌: **{final['cum_chg']*100:+.2f}%** → 终点 **{final['close']:.2f}**")
-        lines.append("")
-
-    # Accuracy
-    lines.append("---")
-    lines.append("")
-    lines.append("## 二、准确度（历史回测）")
-    lines.append("")
-    for code in sorted_codes:
-        if code not in all_bt:
-            continue
-        info = all_bt[code]
-        lines.append(f"### {info['name']} ({code})  — {info['windows']} 个窗口")
-        lines.append("")
-        lines.append("| 周期 | MAPE | MdAPE | <3% | <5% | 方向 | 高覆盖 | 低覆盖 |")
-        lines.append("|---|---|---|---|---|---|---|---|")
-        for d in [1, 3, 5, 7, 10]:
-            if d not in info["metrics"]:
-                continue
-            m = info["metrics"][d]
-            lines.append(
-                f"| D{d:2d} | {m['mape']:.1%} | {m['mdape']:.1%} | "
-                f"{m['lt3']:.0%} | {m['lt5']:.0%} | {m['dir']:.0%} | "
-                f"{m['hi_cov']:.0%} | {m['lo_cov']:.0%} |"
-            )
+        lines.append(f"5日涨跌: **{final['cum_chg']*100:+.2f}%** → 终点 **{final['close']:.2f}**")
         lines.append("")
 
-    # Confidence intervals
-    lines.append("---")
-    lines.append("")
-    lines.append("## 三、预测置信区间（中位误差）")
-    lines.append("")
-    lines.append("| 标的 | D1 ± | D5 ± | D10 ± |")
-    lines.append("|---|---|---|---|")
-    for code in sorted_codes:
-        if code not in all_conf:
-            continue
-        info = all_conf[code]
-        c = info["conf"]
-        lines.append(
-            f"| {info['name']} | "
-            f"{c.get('d1', 0):.2f} | {c.get('d5', 0):.2f} | {c.get('d10', 0):.2f} |"
-        )
-    lines.append("")
+    # Accuracy note
+    lines.append('---')
+    lines.append('')
+    lines.append('## 二、回测指标说明')
+    lines.append('')
+    lines.append('- **MAPE**: 平均绝对百分比误差（越小越好）')
+    lines.append('- **准确率**: 涨跌方向准确率')
+    lines.append('- **高覆盖**: 预测最高价 >= 实际最高价的比例')
+    lines.append('- **低覆盖**: 预测最低价 <= 实际最低价的比例')
+    lines.append('- **置信±**: 历史中位绝对误差（实际价格偏离预测的典型幅度）')
+    lines.append('')
 
+    # Stability alerts
     # Stability alerts
     if all_stability:
         lines.append("---")
         lines.append("")
-        lines.append("## 四、预测稳定性告警")
+        lines.append("## 三、预测稳定性告警")
         lines.append("")
         lines.append("以下标的预测结果较上次发生显著变化，请关注：")
         lines.append("")

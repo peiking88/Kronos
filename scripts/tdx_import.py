@@ -18,11 +18,13 @@ import os
 import pickle
 import sys
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Optional
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 # Add project root for tdxdata access
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -270,11 +272,13 @@ class TdxDataImporter:
         dividend_type: str = "none",
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        workers: int = 8,
     ):
         self.tdxdir = tdxdir or DEFAULT_TDXDIR
         self.dividend_type = dividend_type
         self.start_date = start_date
         self.end_date = end_date
+        self.workers = max(1, workers)
         self._reader: Optional[Reader] = None
 
         # Adjust type for tdxdata (qfq / hfq / None)
@@ -282,6 +286,8 @@ class TdxDataImporter:
 
         # Factor cache: {code: DataFrame} persisted to disk
         self._factor_cache: dict[str, pd.DataFrame] = {}
+        # Stocks whose factor fetch failed — skip retry in main loop
+        self._skip_factors: set[str] = set()
         self._factor_cache_dir = os.path.join(
             os.path.dirname(self.tdxdir), ".factor_cache"
         )
@@ -492,6 +498,11 @@ class TdxDataImporter:
         """Import directly from TDX local files."""
         reader = self._get_reader()
         method = config["method"]
+
+        # Pre-fetch adjustment factors in parallel before the main loop
+        if method == "daily" and self._adjust_code:
+            self._prefetch_factors_parallel(stock_list)
+
         result_parts = []
 
         for i, code in enumerate(stock_list):
@@ -591,10 +602,89 @@ class TdxDataImporter:
             self._quotes_client = Quotes.factory(market='std')
         return self._quotes_client
 
+    def _prefetch_factors_parallel(self, stock_list: list[str]) -> None:
+        """Pre-fetch adjustment factors for all stocks using parallel threads.
+
+        Stocks already in memory/disk cache are skipped. Remaining stocks
+        are fetched concurrently via ThreadPoolExecutor, each with its own
+        Quotes connection (mootdx connections are not thread-safe).
+        """
+        if not self._adjust_code:
+            return
+
+        # Phase 1: identify which stocks need fetching
+        need_fetch = []
+        for code in stock_list:
+            if code in self._factor_cache:
+                continue
+            cache_file = os.path.join(self._factor_cache_dir, f"{code}.pkl")
+            if os.path.exists(cache_file):
+                try:
+                    factor_df = pd.read_pickle(cache_file)
+                    self._factor_cache[code] = factor_df
+                except Exception:
+                    need_fetch.append(code)
+            else:
+                need_fetch.append(code)
+
+        cached = len(stock_list) - len(need_fetch)
+        if cached:
+            print(f"  因子缓存命中: {cached}/{len(stock_list)}")
+        if not need_fetch:
+            print(f"  因子全部命中缓存，无需网络获取")
+            return
+
+        print(f"  并行获取复权因子: {len(need_fetch)} 只股票, {self.workers} 线程")
+
+        os.makedirs(self._factor_cache_dir, exist_ok=True)
+
+        def _fetch_one(code: str) -> tuple[str, pd.DataFrame | None]:
+            """Fetch factor for a single stock in a worker thread."""
+            try:
+                from mootdx.quotes import Quotes
+                from tdxdata.sources.adjust import fetch_factor
+                client = Quotes.factory(market='std')
+                factor_df = fetch_factor(code, self._adjust_code,
+                                         quotes_client=client)
+                return code, factor_df
+            except Exception as e:
+                print(f"  WARNING: 因子获取失败 {code}: {e}")
+                return code, None
+
+        # Phase 2: parallel fetch
+        success = 0
+        with ThreadPoolExecutor(max_workers=self.workers) as executor:
+            futures = {executor.submit(_fetch_one, code): code
+                       for code in need_fetch}
+            with tqdm(total=len(need_fetch), desc="  获取复权因子",
+                      unit="股", ncols=80) as pbar:
+                for future in as_completed(futures):
+                    code, factor_df = future.result()
+                    if factor_df is not None and not factor_df.empty:
+                        cache_file = os.path.join(
+                            self._factor_cache_dir, f"{code}.pkl")
+                        try:
+                            factor_df.to_pickle(cache_file)
+                        except Exception:
+                            pass
+                        self._factor_cache[code] = factor_df
+                        success += 1
+                    else:
+                        self._skip_factors.add(code)
+                    pbar.update(1)
+
+        failed = len(need_fetch) - success
+        print(f"  因子获取完成: {success} 成功, {failed} 失败"
+              + (f"（失败股票将使用未复权数据）" if failed else ""))
+
     def _adjust_with_cache(
         self, df: pd.DataFrame, code: str
     ) -> pd.DataFrame:
         """Apply price adjustment with disk-cached factors."""
+        # Skip stocks that failed during parallel prefetch
+        if code in self._skip_factors:
+            return df
+
         if code in self._factor_cache:
             factor_df = self._factor_cache[code]
             return self._apply_factor(df, factor_df)
@@ -852,6 +942,12 @@ def parse_args():
         help="Limit to first N stocks (for testing, 0 = all)",
     )
     p.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="Parallel threads for factor fetching (default: 8)",
+    )
+    p.add_argument(
         "--list-stocks",
         action="store_true",
         help="List available stocks and exit",
@@ -913,6 +1009,7 @@ def main():
         dividend_type=args.dividend_type,
         start_date=args.start_date,
         end_date=args.end_date,
+        workers=args.workers,
     )
 
     for period in args.periods:
