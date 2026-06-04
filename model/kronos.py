@@ -8,6 +8,7 @@ from tqdm import trange
 
 sys.path.append("../")
 from model.module import *
+from model.covariate import InputInjectionBlock
 
 
 class KronosTokenizer(nn.Module, PyTorchModelHubMixin):
@@ -220,6 +221,10 @@ class Kronos(nn.Module, PyTorchModelHubMixin):
         self.norm = RMSNorm(self.d_model)
         self.dep_layer = DependencyAwareLayer(self.d_model)
         self.head = DualHead(self.s1_bits, self.s2_bits, self.d_model)
+        # IIB: Input Injection Block — 协变量残差注入
+        self.iib = InputInjectionBlock(
+            d_model=self.d_model, cov_dim=7, hidden_dim=256, dropout=self.ffn_dropout_p
+        )
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -236,7 +241,7 @@ class Kronos(nn.Module, PyTorchModelHubMixin):
         elif isinstance(module, RMSNorm):
             nn.init.ones_(module.weight)
 
-    def forward(self, s1_ids, s2_ids, stamp=None, padding_mask=None, use_teacher_forcing=False, s1_targets=None):
+    def forward(self, s1_ids, s2_ids, stamp=None, padding_mask=None, use_teacher_forcing=False, s1_targets=None, past_covariates=None):
         """
         Args:
             s1_ids (torch.Tensor): Input tensor of s1 token IDs. Shape: [batch_size, seq_len]
@@ -252,6 +257,7 @@ class Kronos(nn.Module, PyTorchModelHubMixin):
                 - s2_logits: Logits for s2 token predictions, conditioned on s1. Shape: [batch_size, seq_len, s2_vocab_size]
         """
         x = self.embedding([s1_ids, s2_ids])
+        x = x + self.iib(x, past_covariates)
         if stamp is not None:
             time_embedding = self.time_emb(stamp)
             x = x + time_embedding
@@ -275,7 +281,7 @@ class Kronos(nn.Module, PyTorchModelHubMixin):
         s2_logits = self.head.cond_forward(x2)
         return s1_logits, s2_logits
 
-    def decode_s1(self, s1_ids, s2_ids, stamp=None, padding_mask=None):
+    def decode_s1(self, s1_ids, s2_ids, stamp=None, padding_mask=None, past_covariates=None):
         """
         Decodes only the s1 tokens.
 
@@ -287,6 +293,7 @@ class Kronos(nn.Module, PyTorchModelHubMixin):
             s2_ids (torch.Tensor): Input tensor of s2 token IDs. Shape: [batch_size, seq_len]
             stamp (torch.Tensor, optional): Temporal stamp tensor. Shape: [batch_size, seq_len]. Defaults to None.
             padding_mask (torch.Tensor, optional): Mask for padding tokens. Shape: [batch_size, seq_len]. Defaults to None.
+            past_covariates (torch.Tensor, optional): Covariate features. Shape: [batch_size, seq_len, 7]. Defaults to None.
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor]:
@@ -294,6 +301,7 @@ class Kronos(nn.Module, PyTorchModelHubMixin):
                 - context: Context representation from the Transformer. Shape: [batch_size, seq_len, d_model]
         """
         x = self.embedding([s1_ids, s2_ids])
+        x = x + self.iib(x, past_covariates)
         if stamp is not None:
             time_embedding = self.time_emb(stamp)
             x = x + time_embedding
@@ -386,7 +394,7 @@ def sample_from_logits(logits, temperature=1.0, top_k=None, top_p=None, sample_l
     return x
 
 
-def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context, pred_len, clip=5, T=1.0, top_k=0, top_p=0.99, sample_count=5, verbose=False):
+def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context, pred_len, clip=5, T=1.0, top_k=0, top_p=0.99, sample_count=5, verbose=False, past_covariates=None):
     with torch.no_grad():
         x = torch.clip(x, -clip, clip)
 
@@ -395,8 +403,12 @@ def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context
         x_stamp = x_stamp.unsqueeze(1).repeat(1, sample_count, 1, 1).reshape(-1, x_stamp.size(1), x_stamp.size(2)).to(device)
         y_stamp = y_stamp.unsqueeze(1).repeat(1, sample_count, 1, 1).reshape(-1, y_stamp.size(1), y_stamp.size(2)).to(device)
 
+        # 协变量 repeat 以匹配 sample_count 维度
+        if past_covariates is not None:
+            past_covariates = past_covariates.unsqueeze(1).repeat(1, sample_count, 1, 1).reshape(-1, past_covariates.size(1), past_covariates.size(2)).to(device)
+
         x_token = tokenizer.encode(x, half=True)
-        
+
         initial_seq_len = x.size(1)
         batch_size = x_token[0].size(0)
         total_seq_len = initial_seq_len + pred_len
@@ -413,6 +425,16 @@ def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context
             pre_buffer[:, :buffer_len] = x_token[0][:, start_idx:start_idx + buffer_len]
             post_buffer[:, :buffer_len] = x_token[1][:, start_idx:start_idx + buffer_len]
 
+        # 协变量 buffer: 初始填入已知协变量，预测阶段填零（未来不可知）
+        if past_covariates is not None:
+            cov_buffer = torch.zeros(batch_size, max_context, past_covariates.size(2), device=device)
+            cov_src_len = min(past_covariates.size(1), buffer_len)
+            cov_dst_start = max(0, max_context - initial_seq_len)
+            cov_src_start = max(0, past_covariates.size(1) - buffer_len)
+            cov_buffer[:, cov_dst_start:cov_dst_start + cov_src_len, :] = past_covariates[:, cov_src_start:cov_src_start + cov_src_len, :]
+        else:
+            cov_buffer = None
+
         if verbose:
             ran = trange
         else:
@@ -426,14 +448,16 @@ def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context
                     pre_buffer[:, :window_len],
                     post_buffer[:, :window_len]
                 ]
+                current_cov = cov_buffer[:, :window_len, :] if cov_buffer is not None else None
             else:
                 input_tokens = [pre_buffer, post_buffer]
+                current_cov = cov_buffer if cov_buffer is not None else None
 
             context_end = current_seq_len
             context_start = max(0, context_end - max_context)
             current_stamp = full_stamp[:, context_start:context_end, :].contiguous()
 
-            s1_logits, context = model.decode_s1(input_tokens[0], input_tokens[1], current_stamp)
+            s1_logits, context = model.decode_s1(input_tokens[0], input_tokens[1], current_stamp, past_covariates=current_cov)
             s1_logits = s1_logits[:, -1, :]
             sample_pre = sample_from_logits(s1_logits, temperature=T, top_k=top_k, top_p=top_p, sample_logits=True)
 
@@ -505,18 +529,21 @@ class KronosPredictor:
         self.tokenizer = self.tokenizer.to(self.device)
         self.model = self.model.to(self.device)
 
-    def generate(self, x, x_stamp, y_stamp, pred_len, T, top_k, top_p, sample_count, verbose):
+    def generate(self, x, x_stamp, y_stamp, pred_len, T, top_k, top_p, sample_count, verbose, past_covariates=None):
 
         x_tensor = torch.from_numpy(np.array(x).astype(np.float32)).to(self.device)
         x_stamp_tensor = torch.from_numpy(np.array(x_stamp).astype(np.float32)).to(self.device)
         y_stamp_tensor = torch.from_numpy(np.array(y_stamp).astype(np.float32)).to(self.device)
 
+        if past_covariates is not None:
+            past_covariates = torch.from_numpy(np.array(past_covariates).astype(np.float32)).to(self.device)
+
         preds = auto_regressive_inference(self.tokenizer, self.model, x_tensor, x_stamp_tensor, y_stamp_tensor, self.max_context, pred_len,
-                                          self.clip, T, top_k, top_p, sample_count, verbose)
+                                          self.clip, T, top_k, top_p, sample_count, verbose, past_covariates=past_covariates)
         preds = preds[:, -pred_len:, :]
         return preds
 
-    def predict(self, df, x_timestamp, y_timestamp, pred_len, T=1.0, top_k=0, top_p=0.9, sample_count=1, verbose=True):
+    def predict(self, df, x_timestamp, y_timestamp, pred_len, T=1.0, top_k=0, top_p=0.9, sample_count=1, verbose=True, past_covariates=None):
 
         if not isinstance(df, pd.DataFrame):
             raise ValueError("Input must be a pandas DataFrame.")
@@ -550,7 +577,7 @@ class KronosPredictor:
         x_stamp = x_stamp[np.newaxis, :]
         y_stamp = y_stamp[np.newaxis, :]
 
-        preds = self.generate(x, x_stamp, y_stamp, pred_len, T, top_k, top_p, sample_count, verbose)
+        preds = self.generate(x, x_stamp, y_stamp, pred_len, T, top_k, top_p, sample_count, verbose, past_covariates=past_covariates)
 
         preds = preds.squeeze(0)
         preds = preds * (x_std + 1e-5) + x_mean
@@ -559,7 +586,7 @@ class KronosPredictor:
         return pred_df
 
 
-    def predict_batch(self, df_list, x_timestamp_list, y_timestamp_list, pred_len, T=1.0, top_k=0, top_p=0.9, sample_count=1, verbose=True):
+    def predict_batch(self, df_list, x_timestamp_list, y_timestamp_list, pred_len, T=1.0, top_k=0, top_p=0.9, sample_count=1, verbose=True, past_covariates_list=None):
         """
         Perform parallel (batch) prediction on multiple time series. All series must have the same historical length and prediction length (pred_len).
 
@@ -649,7 +676,13 @@ class KronosPredictor:
         x_stamp_batch = np.stack(x_stamp_list, axis=0).astype(np.float32) # (B, seq_len, time_feat)
         y_stamp_batch = np.stack(y_stamp_list, axis=0).astype(np.float32) # (B, pred_len, time_feat)
 
-        preds = self.generate(x_batch, x_stamp_batch, y_stamp_batch, pred_len, T, top_k, top_p, sample_count, verbose)
+        # 拼接协变量
+        if past_covariates_list is not None:
+            cov_batch = np.stack(past_covariates_list, axis=0).astype(np.float32)  # (B, seq_len, 7)
+        else:
+            cov_batch = None
+
+        preds = self.generate(x_batch, x_stamp_batch, y_stamp_batch, pred_len, T, top_k, top_p, sample_count, verbose, past_covariates=cov_batch)
         # preds: (B, pred_len, feat)
 
         pred_dfs = []

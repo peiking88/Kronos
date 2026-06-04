@@ -112,6 +112,17 @@ class TdxFineTuneConfig:
         )
 
         # =================================================================
+        # IIB (Input Injection Block) 配置
+        # =================================================================
+        self.use_iib = True                        # 是否启用 IIB 协变量注入
+        self.cov_dim = 7                           # 协变量维度（CZSC 7 维特征）
+        self.iib_hidden_dim = 256                  # IIB 内部隐藏维度
+        self.iib_learning_rate = 1e-3              # IIB 学习率（高于全参数微调）
+        self.iib_dropout = 0.1                     # IIB dropout
+        self.freeze_predictor = True               # 冻结 Kronos 主体，仅训练 IIB
+        self.czsc_cache_path = os.path.join(self.dataset_path, "czsc_features")
+
+        # =================================================================
         # Backtesting
         # =================================================================
         self.backtest_result_path = "./outputs/tdx_backtest_results"

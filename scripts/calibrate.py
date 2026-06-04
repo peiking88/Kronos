@@ -15,7 +15,8 @@ BACKTEST_CTX = 400
 
 def backtest_calibrate(predictor, df, pred_len, lookback=BACKTEST_CTX,
                        backtest_days=BACKTEST_DAYS, temperature=1.2,
-                       top_p=0.95, sample_count=2, verbose=True):
+                       top_p=0.95, sample_count=2, verbose=True,
+                       use_covariates=True):
     """回测校准：用最近 backtest_days 天做回测，计算系统性偏差 ME。
 
     参数:
@@ -25,6 +26,7 @@ def backtest_calibrate(predictor, df, pred_len, lookback=BACKTEST_CTX,
         lookback: 回测上下文天数
         backtest_days: 回测验证天数
         temperature, top_p, sample_count: 采样参数
+        use_covariates: 是否计算 CZSC 协变量（默认 True）
 
     返回:
         bias_correction: 校正值（正值 = 预测偏低，需上调；负值 = 预测偏高，需下调）
@@ -45,6 +47,18 @@ def backtest_calibrate(predictor, df, pred_len, lookback=BACKTEST_CTX,
         print(f"  回测校准: 上下文 {ctx_df.index[0]}~{ctx_df.index[-1]} "
               f"→ 预测 {actual_df.index[0]}~{actual_df.index[-1]}")
 
+    # 计算 CZSC 协变量
+    past_covariates = None
+    if use_covariates:
+        try:
+            from model.covariate import CZSCFeatureExtractor
+            extractor = CZSCFeatureExtractor()
+            cov_df = ctx_df.rename(columns={"volume": "vol", "amount": "amt"})
+            cov_features = extractor.extract(cov_df)  # [lookback, 7]
+            past_covariates = cov_features[np.newaxis, :, :]  # [1, lookback, 7]
+        except Exception:
+            pass  # CZSC 提取失败时退化为无协变量
+
     try:
         bt_pred = predictor.predict(
             df=ctx_df[["open", "high", "low", "close", "volume", "amount"]].reset_index(drop=True),
@@ -55,6 +69,7 @@ def backtest_calibrate(predictor, df, pred_len, lookback=BACKTEST_CTX,
             top_p=top_p,
             sample_count=sample_count,
             verbose=False,
+            past_covariates=past_covariates,
         )
     except Exception as e:
         if verbose:

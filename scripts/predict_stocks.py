@@ -30,6 +30,7 @@ from mootdx.quotes import Quotes as _MootdxQuotes
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from model.kronos import KronosTokenizer, Kronos, KronosPredictor
+from model.covariate import CZSCFeatureExtractor
 from scripts.calibrate import backtest_calibrate
 
 # ---------------------------------------------------------------------------
@@ -261,8 +262,12 @@ def fetch_stock_names(codes):
 
 
 def classify_code(code):
-    """判断是否为指数代码。"""
-    return code.startswith("sh000") or code.startswith("sh999") or code.startswith("sz399")
+    """判断是否为指数代码。
+
+    通达信指数代码：sh999xxx（上证指数）、sz399xxx（深证指数）。
+    sh000001 是平安银行，不是指数。
+    """
+    return code.startswith("sh999") or code.startswith("sz399")
 
 
 def classify_prediction(cum_chg):
@@ -407,17 +412,31 @@ def run_prediction(predictor, df, factor):
     last_date = pd.to_datetime(context.index[-1])
     last_close = context["close"].iloc[-1]
 
+    # 预测起点：若数据已包含今天（收盘后），则从明天开始；否则从数据末日次日开始
+    today = pd.Timestamp.today().normalize()
+    pred_start = max(last_date, today) + pd.Timedelta(days=1)
     future = pd.bdate_range(
-        start=last_date + timedelta(days=1), periods=PRED_LEN,
+        start=pred_start, periods=PRED_LEN,
         freq="C", weekmask="Mon Tue Wed Thu Fri"
     )
     x_ts = pd.Series(pd.to_datetime(context.index).values, name="timestamps")
     y_ts = pd.Series(future.values)
 
+    # 计算 CZSC 特征
+    past_covariates = None
+    try:
+        extractor = CZSCFeatureExtractor()
+        cov_df = context.rename(columns={"volume": "vol", "amount": "amt"})
+        cov_features = extractor.extract(cov_df)  # [LOOKBACK, 7]
+        past_covariates = cov_features[np.newaxis, :, :]  # [1, LOOKBACK, 7]
+    except Exception:
+        pass  # CZSC 提取失败时退化为无协变量预测
+
     pred = predictor.predict(
         df=context, x_timestamp=x_ts, y_timestamp=y_ts,
         pred_len=PRED_LEN, T=T, top_p=TOP_P,
-        sample_count=SAMPLE_COUNT, verbose=False
+        sample_count=SAMPLE_COUNT, verbose=False,
+        past_covariates=past_covariates
     )
 
     last_close_actual = float(last_close) / factor
@@ -443,6 +462,7 @@ def run_backtest(predictor, df, factor):
     total_w = len(df) - LOOKBACK - PRED_LEN
     step = max(1, total_w // BACKTEST_WINDOWS)
     results = []
+    extractor = CZSCFeatureExtractor()
 
     for i in range(0, total_w, step):
         ctx = df.iloc[i:i + LOOKBACK]
@@ -450,12 +470,21 @@ def run_backtest(predictor, df, factor):
         if len(act) < PRED_LEN:
             break
         try:
+            # 计算 CZSC 特征
+            cov = None
+            try:
+                cov_df = ctx.rename(columns={"volume": "vol", "amount": "amt"})
+                cov = extractor.extract(cov_df)[np.newaxis, :, :]
+            except Exception:
+                pass
+
             p = predictor.predict(
                 df=ctx,
                 x_timestamp=pd.Series(pd.to_datetime(ctx.index).values),
                 y_timestamp=pd.Series(pd.to_datetime(act.index).values),
                 pred_len=PRED_LEN, T=T, top_p=TOP_P,
-                sample_count=BACKTEST_SAMPLE_COUNT, verbose=False
+                sample_count=BACKTEST_SAMPLE_COUNT, verbose=False,
+                past_covariates=cov
             )
             for d in range(PRED_LEN):
                 pc = p["close"].iloc[d]
@@ -491,12 +520,12 @@ def run_backtest(predictor, df, factor):
             "lt3": (ape < 0.03).mean(), "lt5": (ape < 0.05).mean(),
             "dir": dr, "hi_cov": hc, "lo_cov": lc,
         }
-    # Convert actual prices for confidence intervals (per day)
+    # Confidence: MdAPE × 最新市场价（MdAPE 是尺度不变量，正确反映中位相对误差）
     conf = {}
+    last_actual = float(df["close"].iloc[-1]) / factor
     for d in range(1, PRED_LEN + 1):
-        day_r = r[r["day"] == d]
-        if len(day_r) > 0:
-            conf[f"d{d}"] = float(np.median(np.abs(day_r["pc_hfq"] - day_r["ac_hfq"]))) / factor
+        if d in metrics:
+            conf[f"d{d}"] = float(metrics[d]["mdape"]) * last_actual
 
     return metrics, n_win, conf
 
@@ -562,9 +591,9 @@ def console_output(all_forward, all_bt, all_conf, all_codes, errors, all_stabili
             print(f"  ⚠ 预测稳定性: {all_stability[code]}")
         print(f"{'='*70}")
 
-        # Table header — always show accuracy columns
-        print(f"  {'日期':<14s} {'开盘':>8s} {'最高':>8s} {'最低':>8s} {'收盘':>8s} {'涨跌幅':>8s} {'MAPE':>7s} {'准确率':>6s}")
-        print(f"  {'-'*75}")
+        bt_conf = all_conf[code]["conf"] if code in all_conf else {}
+        print(f"  {'日期':<14s} {'开盘':>8s} {'最高':>8s} {'最低':>8s} {'收盘':>8s} {'涨跌幅':>8s} {'MAPE':>7s} {'准确率':>6s} {'置信±':>7s}")
+        print(f"  {'-'*83}")
 
         for i, r in enumerate(rows):
             prev = base if i == 0 else rows[i-1]["close"]
@@ -572,10 +601,12 @@ def console_output(all_forward, all_bt, all_conf, all_codes, errors, all_stabili
             day = i + 1
             mape_str = f"{bt_metrics[day]['mape']:>6.1%}" if day in bt_metrics else "     —"
             dir_str  = f"{bt_metrics[day]['dir']:>5.0%}" if day in bt_metrics else "    —"
+            conf_key = f"d{day}"
+            conf_str = f"{bt_conf[conf_key]:>6.2f}" if conf_key in bt_conf else "     —"
             print(f"  {str(r['date']):<14s} "
                   f"{r['open']:>8.2f} {r['high']:>8.2f} "
                   f"{r['low']:>8.2f} {r['close']:>8.2f} {daily_chg:>+7.2f}% "
-                  f"{mape_str} {dir_str}")
+                  f"{mape_str} {dir_str} {conf_str}")
 
         final = rows[-1]
         total_chg = (final["close"] - base) / base * 100
@@ -677,6 +708,30 @@ def main():
     fresh_cache = {} if args.no_import else ensure_fresh_data(codes)
 
     # 批量预取复权因子（1日缓存，因子完整后再进行后续预测）
+    print("获取复权因子...")
+    factors = prefetch_factors(codes, fresh_cache)
+    ok_count = sum(1 for _, ok in factors.values() if ok)
+    fail_codes = [c for c, (_, ok) in factors.items() if not ok]
+    if fail_codes:
+        print(f"  ⚠ {len(fail_codes)} 只股票复权因子获取失败（将输出后复权价格）: {fail_codes}")
+    print(f"  因子获取完成: {ok_count}/{len(codes)} 有效")
+
+    # 盘中追加实时行情
+    from scripts.realtime import append_realtime_bars
+    all_data = {}
+    for code in codes:
+        if code in fresh_cache and fresh_cache[code] is not None:
+            all_data[code] = fresh_cache[code]
+        else:
+            d = get_data(code)
+            if d is not None:
+                all_data[code] = d
+    factor_map = {code: f for code, (f, _) in factors.items()}
+    append_realtime_bars(codes, all_data, factor_map)
+    # 将追加后的数据写回 fresh_cache，供 process_single 使用
+    for code in codes:
+        if code in all_data and all_data[code] is not None:
+            fresh_cache[code] = all_data[code]
     print("获取复权因子...")
     factors = prefetch_factors(codes, fresh_cache)
     ok_count = sum(1 for _, ok in factors.values() if ok)

@@ -86,15 +86,34 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Predictor parameters: {n_params:,}")
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=config['predictor_learning_rate'],
-        betas=(config['adam_beta1'], config['adam_beta2']),
-        weight_decay=config['adam_weight_decay'],
-    )
+    # 冻结 Kronos 主体，仅训练 IIB
+    freeze_predictor = config.get('freeze_predictor', False)
+    if freeze_predictor:
+        for name, param in model.named_parameters():
+            if 'iib' not in name:
+                param.requires_grad = False
+        iib_params = [p for n, p in model.named_parameters() if 'iib' in n]
+        iib_param_count = sum(p.numel() for p in iib_params)
+        print(f"IIB trainable params: {iib_param_count:,} / {n_params:,} "
+              f"({100*iib_param_count/n_params:.2f}%)")
+
+    # 构建优化器参数组
+    if freeze_predictor and config.get('iib_learning_rate'):
+        iib_params = [p for n, p in model.named_parameters() if 'iib' in n]
+        optimizer = torch.optim.AdamW([
+            {'params': iib_params, 'lr': config['iib_learning_rate']},
+        ], betas=(config['adam_beta1'], config['adam_beta2']),
+           weight_decay=config['adam_weight_decay'])
+    else:
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=config['predictor_learning_rate'],
+            betas=(config['adam_beta1'], config['adam_beta2']),
+            weight_decay=config['adam_weight_decay'],
+        )
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=config['predictor_learning_rate'],
+        max_lr=config['iib_learning_rate'] if freeze_predictor else config['predictor_learning_rate'],
         steps_per_epoch=len(train_loader),
         epochs=config['epochs'],
         pct_start=0.03,
@@ -120,9 +139,10 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
         train_batches = 0
         optimizer.zero_grad()
 
-        for batch_idx, (batch_x, batch_x_stamp) in enumerate(train_loader):
+        for batch_idx, (batch_x, batch_x_stamp, batch_cov) in enumerate(train_loader):
             batch_x = batch_x.to(device, non_blocking=True)
             batch_x_stamp = batch_x_stamp.to(device, non_blocking=True)
+            batch_cov = batch_cov.to(device, non_blocking=True)
 
             # Tokenize (no grad, frozen tokenizer)
             with torch.no_grad():
@@ -131,9 +151,10 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
             token_in = [tok0[:, :-1], tok1[:, :-1]]
             token_out = [tok0[:, 1:], tok1[:, 1:]]
             stamp_in = batch_x_stamp[:, :-1, :]
+            cov_in = batch_cov[:, :-1, :]
 
             with torch.amp.autocast(device_type='cuda', enabled=use_amp):
-                logits = model(token_in[0], token_in[1], stamp_in)
+                logits = model(token_in[0], token_in[1], stamp_in, past_covariates=cov_in)
                 loss, s1_loss, s2_loss = model.head.compute_loss(
                     logits[0], logits[1], token_out[0], token_out[1]
                 )
@@ -166,16 +187,18 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
         val_loss_total = 0.0
         val_batches = 0
         with torch.no_grad():
-            for batch_x, batch_x_stamp in val_loader:
+            for batch_x, batch_x_stamp, batch_cov in val_loader:
                 batch_x = batch_x.to(device, non_blocking=True)
                 batch_x_stamp = batch_x_stamp.to(device, non_blocking=True)
+                batch_cov = batch_cov.to(device, non_blocking=True)
 
                 tok0, tok1 = tokenizer.encode(batch_x, half=True)
                 token_in = [tok0[:, :-1], tok1[:, :-1]]
                 token_out = [tok0[:, 1:], tok1[:, 1:]]
                 stamp_in = batch_x_stamp[:, :-1, :]
+                cov_in = batch_cov[:, :-1, :]
 
-                logits = model(token_in[0], token_in[1], stamp_in)
+                logits = model(token_in[0], token_in[1], stamp_in, past_covariates=cov_in)
                 val_loss, _, _ = model.head.compute_loss(
                     logits[0], logits[1], token_out[0], token_out[1]
                 )

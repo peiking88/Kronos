@@ -1,5 +1,6 @@
 import pickle
 import random
+import os
 import numpy as np
 import pandas as pd
 import torch
@@ -78,6 +79,21 @@ class QlibDataset(Dataset):
         self.n_samples = min(self.n_samples, len(self.indices))
         print(f"[{data_type.upper()}] Found {len(self.indices)} possible samples. Using {self.n_samples} per epoch.")
 
+        # 加载 CZSC 协变量缓存
+        self.use_covariates = getattr(self.config, 'use_iib', False)
+        self.covariate_cache = {}
+        if self.use_covariates:
+            cov_path = getattr(self.config, 'czsc_cache_path', '')
+            if cov_path:
+                pkl_path = os.path.join(cov_path, f"czsc_features_{data_type}.pkl")
+                if os.path.exists(pkl_path):
+                    with open(pkl_path, 'rb') as f:
+                        self.covariate_cache = pickle.load(f)
+                    print(f"[{data_type.upper()}] Loaded CZSC features for {len(self.covariate_cache)} symbols")
+                else:
+                    print(f"[{data_type.upper()}] WARNING: CZSC cache not found at {pkl_path}")
+                    self.use_covariates = False
+
     def set_epoch_seed(self, epoch: int):
         """
         Sets a new seed for the random sampler for each epoch. This is crucial
@@ -93,8 +109,8 @@ class QlibDataset(Dataset):
         """Returns the number of samples per epoch."""
         return self.n_samples
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+
         # Select a random sample from the entire pool of indices.
         random_idx = self.py_rng.randint(0, len(self.indices) - 1)
         symbol, start_idx = self.indices[random_idx]
@@ -124,7 +140,15 @@ class QlibDataset(Dataset):
         x_tensor = torch.from_numpy(x)
         x_stamp_tensor = torch.from_numpy(x_stamp)
 
-        return x_tensor, x_stamp_tensor
+        # 提取协变量窗口
+        if self.use_covariates and symbol in self.covariate_cache:
+            cov_arr = self.covariate_cache[symbol]
+            cov_window = cov_arr[start_idx:end_idx]
+            cov_tensor = torch.from_numpy(cov_window.astype(np.float32))
+        else:
+            cov_tensor = torch.zeros(self.window, 7, dtype=torch.float32)
+
+        return x_tensor, x_stamp_tensor, cov_tensor
 
 
 if __name__ == '__main__':
@@ -135,8 +159,9 @@ if __name__ == '__main__':
     print(f"Dataset length: {len(train_dataset)}")
 
     if len(train_dataset) > 0:
-        try_x, try_x_stamp = train_dataset[100]  # Index 100 is ignored.
+        try_x, try_x_stamp, try_cov = train_dataset[100]  # Index 100 is ignored.
         print(f"Sample feature shape: {try_x.shape}")
         print(f"Sample time feature shape: {try_x_stamp.shape}")
+        print(f"Sample covariate shape: {try_cov.shape}")
     else:
         print("Dataset is empty.")
