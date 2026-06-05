@@ -123,24 +123,53 @@ def _find_fractal_for_bar(fx_list, bar_dt):
 # ---- D1: 强分型 ----
 
 def get_strong_fractal(fx_list, bar_dt):
-    """D1: 强分型编码。
+    """D1: 强分型编码（含影线+量能增强）。
 
-    编码:
-        +2  强顶分型 (Mark.G, "强")
-        +1  中顶分型 (Mark.G, "中")
-         0  弱分型或无分型
-        -1  中底分型 (Mark.D, "中")
-        -2  强底分型 (Mark.D, "强")
+    基础编码 (power_str):
+        弱=0, 中=1, 强=2
+
+    影线因子 (0~0.3):
+        顶分型看上影线占比，底分型看下影线占比
+
+    量能因子 (0~0.2):
+        分型中间K线量 / 前后K线平均量，超出1.0部分线性映射
+
+    最终: sign(mark) * (base + shadow_score + volume_score)
+    值域: [-2.5, +2.5]
     """
     fx = _find_fractal_for_bar(fx_list, bar_dt)
     if fx is None:
-        return 0
-    strength = {'弱': -1, '中': 0, '强': 1}.get(fx.power_str, 0)
-    if fx.mark == Mark.G:  # 顶分型
-        return 1 + strength  # 弱=0, 中=1, 强=2
-    elif fx.mark == Mark.D:  # 底分型
-        return -(1 + strength)  # 弱=0, 中=-1, 强=-2
-    return 0
+        return 0.0
+
+    # 基础分型强度
+    base = {'弱': 0, '中': 1, '强': 2}.get(fx.power_str, 0)
+
+    # 影线因子 (0~0.3)
+    mid = fx.elements[1]
+    body_range = mid.high - mid.low
+    shadow_score = 0.0
+    if body_range > 0:
+        if fx.mark == Mark.G:  # 顶分型看上影线
+            shadow = (mid.high - max(mid.close, mid.open)) / body_range
+        else:                   # 底分型看下影线
+            shadow = (min(mid.close, mid.open) - mid.low) / body_range
+        shadow_score = min(shadow, 1.0) * 0.3
+
+    # 量能因子 (0~0.2)
+    prev, nxt = fx.elements[0], fx.elements[2]
+    avg_vol = (prev.vol + nxt.vol) / 2
+    volume_score = 0.0
+    if avg_vol > 0:
+        vol_ratio = mid.vol / avg_vol
+        volume_score = min(max(vol_ratio - 1.0, 0.0) / 4.0, 1.0) * 0.2
+
+    # 复合编码
+    raw = base + shadow_score + volume_score
+    if fx.mark == Mark.G:
+        return raw
+    elif fx.mark == Mark.D:
+        return -raw
+    return 0.0
 
 
 # ---- D2: 笔方向 ----

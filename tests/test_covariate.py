@@ -5,6 +5,7 @@ IIB 模块和 CZSC 特征提取器单元测试。
     - InputInjectionBlock: 输出形状、None 时零输出、参数量、梯度流通
     - KronosWithIIB: 无协变量时一致性、有协变量时形状正确
     - CZSCFeatureExtractor: 提取形状、无 NaN/Inf、值域范围
+    - CovFill: 协变量填充模式（last / decay / zero）
 """
 
 import pytest
@@ -222,12 +223,12 @@ class TestCZSCFeatureExtractor:
         assert not np.any(np.isinf(features))
 
     def test_d1_range(self):
-        """D1 (强分型) 值域 [-2, +2]。"""
+        """D1 (强分型) 值域 [-2.5, +2.5]。"""
         extractor = CZSCFeatureExtractor()
         df = _make_test_df()
         features = extractor.extract(df)
-        assert features[:, 0].min() >= -2.0
-        assert features[:, 0].max() <= 2.0
+        assert features[:, 0].min() >= -2.5
+        assert features[:, 0].max() <= 2.5
 
     def test_d2_values(self):
         """D2 (笔方向) 只含 {-1, 0, +1}。"""
@@ -270,6 +271,66 @@ class TestCZSCFeatureExtractor:
         f1 = extractor.extract(df, symbol='test')
         f2 = extractor.extract(df, symbol='test')
         np.testing.assert_array_equal(f1, f2)
+
+    def test_d1_no_fractal_is_zero(self):
+        """D1: 绝大多数非分型 bar 的 D1 值为 0。"""
+        extractor = CZSCFeatureExtractor()
+        df = _make_test_df(n=200)
+        features = extractor.extract(df)
+        d1 = features[:, 0]
+        # 分型 bar 稀疏，大多数应为 0
+        zero_ratio = (d1 == 0.0).sum() / len(d1)
+        assert zero_ratio > 0.5, f"非零 bar 占比 {1 - zero_ratio:.1%}，预期 < 50%"
+
+    def test_d1_continuous_values(self):
+        """D1: 增强后允许连续值（非纯整数）。"""
+        extractor = CZSCFeatureExtractor()
+        # 用多组随机数据增加出现影线/量能增强的概率
+        has_continuous = False
+        for seed in range(20):
+            df = _make_test_df(n=200, seed=seed)
+            features = extractor.extract(df)
+            d1 = features[:, 0]
+            nonzero = d1[d1 != 0.0]
+            if len(nonzero) > 0:
+                # 如果有任何非整数值，说明影线/量能增强生效
+                non_integer = nonzero[nonzero != np.round(nonzero)]
+                if len(non_integer) > 0:
+                    has_continuous = True
+                    break
+        # 至少有一组数据产生了连续值
+        assert has_continuous, "D1 未产生任何连续值，影线/量能增强可能未生效"
+
+    def test_d1_large_volume_boosts_value(self):
+        """D1: 放量分型应产生更高的绝对值。"""
+        extractor = CZSCFeatureExtractor()
+        np.random.seed(42)
+        n = 200
+        dates = pd.date_range('2025-01-01', periods=n, freq='B')
+        price = 10 + np.cumsum(np.random.randn(n) * 0.2)
+
+        # 构造放量数据：在所有 bar 的基础上，随机让某些 bar 成交量放大 5 倍
+        base_vol = np.random.rand(n) * 1000 + 100
+        boosted_vol = base_vol.copy()
+        boosted_vol[::10] *= 5  # 每 10 根 bar 放量一次
+
+        df = pd.DataFrame({
+            'open': price + np.random.rand(n) * 0.1,
+            'high': price + np.abs(np.random.randn(n)) * 0.5,
+            'low': price - np.abs(np.random.randn(n)) * 0.5,
+            'close': price + np.random.randn(n) * 0.1,
+            'vol': boosted_vol,
+            'amt': boosted_vol * price,
+        }, index=dates)
+        df['high'] = df[['open', 'high', 'low', 'close']].max(axis=1)
+        df['low'] = df[['open', 'high', 'low', 'close']].min(axis=1)
+
+        features = extractor.extract(df)
+        d1 = features[:, 0]
+        nonzero = np.abs(d1[d1 != 0.0])
+        # 有非零值且最大值 > 2.0 说明量能增强生效
+        if len(nonzero) > 0:
+            assert nonzero.max() > 2.0, f"D1 最大绝对值 {nonzero.max():.3f}，量能增强未生效"
 
 
 # ======================================================================
@@ -321,3 +382,187 @@ class TestRegressionCompatibility:
         # x + out 应等于 x
         result = x + out
         assert torch.allclose(x, result)
+
+
+# ======================================================================
+# TestCovFill — 协变量填充模式测试
+# ======================================================================
+
+class TestCovFill:
+    """auto_regressive_inference 协变量填充模式测试。
+
+    通过 mock 捕获 decode_s1 收到的协变量，验证三种填充模式行为:
+        - 'zero': 不滚动，向后兼容
+        - 'last':  滚动 + 末值延续
+        - 'decay': 滚动 + 指数衰减
+    """
+
+    @pytest.fixture
+    def inference_setup(self):
+        """创建推理测试所需的 mock 组件。"""
+        from model.kronos import auto_regressive_inference  # noqa: F401
+
+        vocab_size = 512
+        tokenizer = _MockTokenizer(vocab_size)
+        model = _MockModel(vocab_size)
+        return tokenizer, model, model.captured_covs
+
+    def test_zero_mode_no_rolling(self, inference_setup):
+        """cov_fill='zero' 时 cov_buffer 不滚动，保持向后兼容。"""
+        from model.kronos import auto_regressive_inference
+        tokenizer, model, captured = inference_setup
+
+        B, T, C = 1, 10, 6
+        x = torch.randn(B, T, C)
+        x_stamp = torch.randn(B, T, 4)
+        y_stamp = torch.randn(B, 5, 4)
+        cov = torch.randn(B, T, 7)
+
+        auto_regressive_inference(
+            tokenizer, model, x, x_stamp, y_stamp,
+            max_context=10, pred_len=5, sample_count=1,
+            past_covariates=cov, cov_fill='zero',
+        )
+
+        non_none = [c for c in captured if c is not None]
+        assert len(non_none) >= 2, "至少应有 2 步捕获"
+        # 所有步的 cov_buffer 应完全相同（不滚动）
+        for i in range(1, len(non_none)):
+            assert torch.allclose(non_none[i], non_none[0], atol=1e-6), \
+                f"cov_fill='zero' 时第 {i} 步 cov_buffer 不应变化"
+
+    def test_last_mode_rolling(self, inference_setup):
+        """cov_fill='last' 时 cov_buffer 随滑动窗口滚动。"""
+        from model.kronos import auto_regressive_inference
+        tokenizer, model, captured = inference_setup
+
+        B, T, C = 1, 10, 6
+        x = torch.randn(B, T, C)
+        x_stamp = torch.randn(B, T, 4)
+        y_stamp = torch.randn(B, 5, 4)
+        cov = torch.randn(B, T, 7)
+
+        auto_regressive_inference(
+            tokenizer, model, x, x_stamp, y_stamp,
+            max_context=10, pred_len=5, sample_count=1,
+            past_covariates=cov, cov_fill='last',
+        )
+
+        non_none = [c for c in captured if c is not None]
+        assert len(non_none) >= 2
+        # 滚动后每步 cov_buffer 应不同
+        assert not torch.allclose(non_none[0], non_none[1], atol=1e-6), \
+            "cov_fill='last' 时 cov_buffer 应随滑动变化"
+
+        # 滚动后末位应等于最后已知协变量
+        last_known = cov[0, -1, :]  # [7]
+        for cov_tensor in non_none[1:]:
+            last_pos = cov_tensor[0, -1, :]
+            assert torch.allclose(last_pos, last_known, atol=1e-5), \
+                "滚动后末位应等于最后已知协变量"
+
+    def test_decay_mode_rolling(self, inference_setup):
+        """cov_fill='decay' 时 cov_buffer 也随滑动窗口滚动。"""
+        from model.kronos import auto_regressive_inference
+        tokenizer, model, captured = inference_setup
+
+        B, T, C = 1, 10, 6
+        x = torch.randn(B, T, C)
+        x_stamp = torch.randn(B, T, 4)
+        y_stamp = torch.randn(B, 5, 4)
+        cov = torch.randn(B, T, 7)
+
+        auto_regressive_inference(
+            tokenizer, model, x, x_stamp, y_stamp,
+            max_context=10, pred_len=5, sample_count=1,
+            past_covariates=cov, cov_fill='decay',
+        )
+
+        non_none = [c for c in captured if c is not None]
+        assert len(non_none) >= 2
+        assert not torch.allclose(non_none[0], non_none[1], atol=1e-6), \
+            "cov_fill='decay' 时 cov_buffer 应随滑动变化"
+
+    def test_no_covariates_all_modes(self, inference_setup):
+        """past_covariates=None 时三种模式均正常工作。"""
+        from model.kronos import auto_regressive_inference
+        tokenizer, model, captured = inference_setup
+
+        B, T, C = 1, 10, 6
+        x = torch.randn(B, T, C)
+        x_stamp = torch.randn(B, T, 4)
+        y_stamp = torch.randn(B, 5, 4)
+
+        for fill in ['zero', 'last', 'decay']:
+            captured.clear()
+            auto_regressive_inference(
+                tokenizer, model, x, x_stamp, y_stamp,
+                max_context=10, pred_len=5, sample_count=1,
+                past_covariates=None, cov_fill=fill,
+            )
+            assert all(c is None for c in captured), \
+                f"past_covariates=None 时 decode_s1 不应收到协变量 (fill={fill})"
+
+    def test_default_fill_is_last(self, inference_setup):
+        """默认 cov_fill='last'。"""
+        from model.kronos import auto_regressive_inference
+        tokenizer, model, captured = inference_setup
+
+        B, T, C = 1, 10, 6
+        x = torch.randn(B, T, C)
+        x_stamp = torch.randn(B, T, 4)
+        y_stamp = torch.randn(B, 5, 4)
+        cov = torch.randn(B, T, 7)
+
+        # 不传 cov_fill，应等同于 'last'
+        auto_regressive_inference(
+            tokenizer, model, x, x_stamp, y_stamp,
+            max_context=10, pred_len=5, sample_count=1,
+            past_covariates=cov,
+        )
+
+        non_none = [c for c in captured if c is not None]
+        assert len(non_none) >= 2
+        # 应该有滚动（非 zero 行为）
+        assert not torch.allclose(non_none[0], non_none[1], atol=1e-6), \
+            "默认 cov_fill 应为 'last'，cov_buffer 应滚动"
+
+
+class _MockTokenizer:
+    """用于测试的 mock tokenizer。"""
+
+    def __init__(self, vocab_size=512):
+        self.vocab_size = vocab_size
+
+    def encode(self, x, half=True):
+        B, T = x.shape[0], x.shape[1]
+        return (
+            torch.randint(0, self.vocab_size, (B, T)),
+            torch.randint(0, self.vocab_size, (B, T)),
+        )
+
+    def decode(self, tokens, half=True):
+        B, T = tokens[0].shape[0], tokens[0].shape[1]
+        return torch.randn(B, T, 6)
+
+
+class _MockModel:
+    """用于测试的 mock model，捕获传入 decode_s1 的协变量。"""
+
+    def __init__(self, vocab_size=512):
+        self.vocab_size = vocab_size
+        self.captured_covs = []
+
+    def decode_s1(self, s1, s2, stamp=None, padding_mask=None, past_covariates=None):
+        if past_covariates is not None:
+            self.captured_covs.append(past_covariates.detach().clone())
+        else:
+            self.captured_covs.append(None)
+        B, T = s1.shape[0], s1.shape[1]
+        s1_logits = torch.randn(B, T, self.vocab_size)
+        context = torch.randn(B, T, 256)
+        return s1_logits, context
+
+    def decode_s2(self, context, s1_ids, padding_mask=None):
+        B, T = context.shape[0], context.shape[1]
+        return torch.randn(B, T, self.vocab_size)

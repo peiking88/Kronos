@@ -394,7 +394,7 @@ def sample_from_logits(logits, temperature=1.0, top_k=None, top_p=None, sample_l
     return x
 
 
-def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context, pred_len, clip=5, T=1.0, top_k=0, top_p=0.99, sample_count=5, verbose=False, past_covariates=None):
+def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context, pred_len, clip=5, T=1.0, top_k=0, top_p=0.99, sample_count=5, verbose=False, past_covariates=None, cov_fill='last'):
     with torch.no_grad():
         x = torch.clip(x, -clip, clip)
 
@@ -425,13 +425,32 @@ def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context
             pre_buffer[:, :buffer_len] = x_token[0][:, start_idx:start_idx + buffer_len]
             post_buffer[:, :buffer_len] = x_token[1][:, start_idx:start_idx + buffer_len]
 
-        # 协变量 buffer: 初始填入已知协变量，预测阶段填零（未来不可知）
+        # 协变量 buffer: 初始填入已知协变量，预测阶段延续末值（或衰减/零）
+        last_known_cov = None
         if past_covariates is not None:
             cov_buffer = torch.zeros(batch_size, max_context, past_covariates.size(2), device=device)
             cov_src_len = min(past_covariates.size(1), buffer_len)
             cov_dst_start = max(0, max_context - initial_seq_len)
             cov_src_start = max(0, past_covariates.size(1) - buffer_len)
             cov_buffer[:, cov_dst_start:cov_dst_start + cov_src_len, :] = past_covariates[:, cov_src_start:cov_src_start + cov_src_len, :]
+
+            # 缓存最后已知协变量，用于填充未来步和滑动窗口
+            last_known_cov = past_covariates[:, -1:, :]  # [B, 1, cov_dim]
+
+            # 填充未来步协变量（替代全零）
+            future_start = cov_dst_start + cov_src_len
+            if future_start < max_context and cov_fill != 'zero':
+                n_future = max_context - future_start
+                if cov_fill == 'last':
+                    cov_buffer[:, future_start:, :] = last_known_cov.expand(-1, n_future, -1)
+                elif cov_fill == 'decay':
+                    known_cov = cov_buffer[:, cov_dst_start:future_start, :]
+                    cov_mean = known_cov.mean(dim=1, keepdim=True)  # [B, 1, cov_dim]
+                    alpha = torch.linspace(1.0, 0.3, steps=n_future, device=device)
+                    cov_buffer[:, future_start:, :] = (
+                        alpha.view(1, -1, 1) * last_known_cov
+                        + (1 - alpha.view(1, -1, 1)) * cov_mean
+                    )
         else:
             cov_buffer = None
 
@@ -476,6 +495,10 @@ def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context
                 post_buffer.copy_(torch.roll(post_buffer, shifts=-1, dims=1))
                 pre_buffer[:, -1] = sample_pre.squeeze(-1)
                 post_buffer[:, -1] = sample_post.squeeze(-1)
+                # 协变量 buffer 同步滑动，新位置延续最后已知值（zero 模式不滚动，保持向后兼容）
+                if cov_buffer is not None and last_known_cov is not None and cov_fill != 'zero':
+                    cov_buffer.copy_(torch.roll(cov_buffer, shifts=-1, dims=1))
+                    cov_buffer[:, -1, :] = last_known_cov.squeeze(1)
 
         full_pre = torch.cat([x_token[0], generated_pre], dim=1)
         full_post = torch.cat([x_token[1], generated_post], dim=1)
@@ -529,7 +552,7 @@ class KronosPredictor:
         self.tokenizer = self.tokenizer.to(self.device)
         self.model = self.model.to(self.device)
 
-    def generate(self, x, x_stamp, y_stamp, pred_len, T, top_k, top_p, sample_count, verbose, past_covariates=None):
+    def generate(self, x, x_stamp, y_stamp, pred_len, T, top_k, top_p, sample_count, verbose, past_covariates=None, cov_fill='last'):
 
         x_tensor = torch.from_numpy(np.array(x).astype(np.float32)).to(self.device)
         x_stamp_tensor = torch.from_numpy(np.array(x_stamp).astype(np.float32)).to(self.device)
@@ -539,11 +562,11 @@ class KronosPredictor:
             past_covariates = torch.from_numpy(np.array(past_covariates).astype(np.float32)).to(self.device)
 
         preds = auto_regressive_inference(self.tokenizer, self.model, x_tensor, x_stamp_tensor, y_stamp_tensor, self.max_context, pred_len,
-                                          self.clip, T, top_k, top_p, sample_count, verbose, past_covariates=past_covariates)
+                                          self.clip, T, top_k, top_p, sample_count, verbose, past_covariates=past_covariates, cov_fill=cov_fill)
         preds = preds[:, -pred_len:, :]
         return preds
 
-    def predict(self, df, x_timestamp, y_timestamp, pred_len, T=1.0, top_k=0, top_p=0.9, sample_count=1, verbose=True, past_covariates=None):
+    def predict(self, df, x_timestamp, y_timestamp, pred_len, T=1.0, top_k=0, top_p=0.9, sample_count=1, verbose=True, past_covariates=None, cov_fill='last'):
 
         if not isinstance(df, pd.DataFrame):
             raise ValueError("Input must be a pandas DataFrame.")
@@ -577,7 +600,7 @@ class KronosPredictor:
         x_stamp = x_stamp[np.newaxis, :]
         y_stamp = y_stamp[np.newaxis, :]
 
-        preds = self.generate(x, x_stamp, y_stamp, pred_len, T, top_k, top_p, sample_count, verbose, past_covariates=past_covariates)
+        preds = self.generate(x, x_stamp, y_stamp, pred_len, T, top_k, top_p, sample_count, verbose, past_covariates=past_covariates, cov_fill=cov_fill)
 
         preds = preds.squeeze(0)
         preds = preds * (x_std + 1e-5) + x_mean
