@@ -52,14 +52,14 @@ class TdxFineTuneConfig:
         self.epochs = 30
         self.log_interval = 50
 
-        # Batch sizes tuned for RTX 4060 Laptop 8GB
-        self.batch_size = 50         # Tokenizer: OK at bs=50 (fp32, ~5GB)
-        self.predictor_batch_size = 12  # Predictor: bs=12 with AMP fp16
-        self.predictor_accumulation = 4  # Effective bs = 12 * 4 = 48
+        # Batch sizes tuned for GPU VRAM
+        self.batch_size = 128        # Tokenizer: bf16 AMP (RTX 5080 16GB)
+        self.predictor_batch_size = 128  # Predictor: bf16 AMP (RTX 5080 16GB)
+        self.predictor_accumulation = 1  # Effective bs = 128 * 1 = 128
 
         # Number of samples per epoch
-        self.n_train_iter = 2000 * self.batch_size
-        self.n_val_iter = 400 * self.batch_size
+        self.n_train_iter = 1000 * self.batch_size
+        self.n_val_iter = 200 * self.batch_size
 
         # Learning rates
         self.tokenizer_learning_rate = 2e-4
@@ -85,7 +85,13 @@ class TdxFineTuneConfig:
         # =================================================================
         # Mixed Precision
         # =================================================================
-        self.use_amp = True  # Automatic Mixed Precision for predictor training
+        self.use_amp = True  # bf16 AMP for training (RTX 5080 原生 bf16)
+
+        # =================================================================
+        # Phase Control — 两阶段训练
+        # =================================================================
+        self.phase = 'full'                # 'full'=Phase1 全参数微调, 'iib'=Phase2 IIB训练
+        self.phase1_epochs = 10            # Phase 1 epoch 数（热身，不宜过多）
 
         # =================================================================
         # Model Paths — downloaded from HuggingFace via hf-mirror.com
@@ -117,10 +123,18 @@ class TdxFineTuneConfig:
         self.use_iib = True                        # 是否启用 IIB 协变量注入
         self.cov_dim = 7                           # 协变量维度（CZSC 7 维特征）
         self.iib_hidden_dim = 256                  # IIB 内部隐藏维度
-        self.iib_learning_rate = 1e-3              # IIB 学习率（高于全参数微调）
-        self.iib_dropout = 0.1                     # IIB dropout
+        self.iib_dropout = 0.3                     # IIB dropout（从 0.1 提高）
+        self.iib_n_layers = 2                      # IIB 残差 MLP 层数（从 1 升级）
+        self.iib_learning_rate = 3e-4              # IIB 学习率（从 1e-3 降低）
+        self.iib_weight_decay = 0.2                # IIB 权重衰减
         self.freeze_predictor = True               # 冻结 Kronos 主体，仅训练 IIB
         self.czsc_cache_path = os.path.join(self.dataset_path, "czsc_features")
+
+        # 渐进式解冻（Phase 2）
+        self.iib_only_epochs = 5                   # Stage A: 仅训练 IIB
+        self.iib_plus_top_epochs = 5               # Stage B: IIB + 后 4 层
+        self.transformer_top_lr = 1e-5             # Stage B/C 顶层学习率
+        self.transformer_base_lr = 5e-6            # Stage C 全参数学习率（极低）
 
         # =================================================================
         # Backtesting

@@ -5,7 +5,10 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-from config import Config
+try:
+    from config import Config
+except ImportError:
+    Config = None
 
 
 class QlibDataset(Dataset):
@@ -21,7 +24,9 @@ class QlibDataset(Dataset):
     """
 
     def __init__(self, data_type: str = 'train', config=None):
-        self.config = config if config is not None else Config()
+        self.config = config if config is not None else (Config() if Config else None)
+        if self.config is None:
+            raise ValueError("config is required when Config module not available")
         if data_type not in ['train', 'val']:
             raise ValueError("data_type must be 'train' or 'val'")
         self.data_type = data_type
@@ -137,16 +142,22 @@ class QlibDataset(Dataset):
         x = np.clip(x, -self.config.clip, self.config.clip)
 
         # Convert to PyTorch tensors.
-        x_tensor = torch.from_numpy(x)
-        x_stamp_tensor = torch.from_numpy(x_stamp)
+        # torch.tensor() 创建全新存储，避免 DataLoader collate 时
+        # "Trying to resize storage that is not resizable" 错误
+        # （PyTorch 2.12+ from_numpy().clone() 的 storage 仍不可 resize）。
+        x_tensor = torch.tensor(x, dtype=torch.float32)
+        x_stamp_tensor = torch.tensor(x_stamp, dtype=torch.float32)
 
-        # 提取协变量窗口
+        # 提取协变量窗口，确保形状始终为 [self.window, 7]
+        cov_tensor = torch.zeros(self.window, 7, dtype=torch.float32)
         if self.use_covariates and symbol in self.covariate_cache:
             cov_arr = self.covariate_cache[symbol]
             cov_window = cov_arr[start_idx:end_idx]
-            cov_tensor = torch.from_numpy(cov_window.astype(np.float32))
-        else:
-            cov_tensor = torch.zeros(self.window, 7, dtype=torch.float32)
+            actual_len = min(len(cov_window), self.window)
+            if actual_len > 0:
+                cov_tensor[:actual_len] = torch.tensor(
+                    cov_window[:actual_len], dtype=torch.float32
+                )
 
         return x_tensor, x_stamp_tensor, cov_tensor
 

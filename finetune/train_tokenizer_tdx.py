@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Single-GPU fine-tuning script for KronosTokenizer using TDX local data.
+Uses bf16 AMP for RTX 5080 16GB — no GradScaler needed for bf16.
 
 Usage:
-    python finetune/train_tokenizer_tdx.py [--config CONFIG] [--device cuda:0]
+    python finetune/train_tokenizer_tdx.py [--data-dir DATA_DIR] [--device cuda:0]
 """
 
 import os
@@ -26,6 +27,18 @@ from model.kronos import KronosTokenizer
 
 
 # ---------------------------------------------------------------------------
+# Custom collate: 避免 PyTorch 2.12 多进程 storage resize bug
+# 必须定义在模块顶层，否则 multiprocessing 无法 pickle。
+def fast_collate(batch):
+    xs, stamps, covs = zip(*batch)
+    return (
+        torch.stack(xs),
+        torch.stack(stamps),
+        torch.stack(covs),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
 
@@ -43,17 +56,19 @@ def create_dataloaders(config, config_obj, data_dir: str):
         train_dataset,
         batch_size=config['batch_size'],
         shuffle=True,
-        num_workers=config.get('num_workers', 2),
+        num_workers=4,
         pin_memory=True,
         drop_last=True,
+        collate_fn=fast_collate,
     )
     val_loader = DataLoader(
         valid_dataset,
         batch_size=config['batch_size'],
         shuffle=False,
-        num_workers=config.get('num_workers', 2),
+        num_workers=4,
         pin_memory=True,
         drop_last=False,
+        collate_fn=fast_collate,
     )
     return train_loader, val_loader, train_dataset, valid_dataset
 
@@ -89,6 +104,9 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
         div_factor=10,
     )
 
+    use_amp = config.get('use_amp', True) and device.type == 'cuda'
+    print(f"AMP (bf16): {use_amp}")
+
     best_val_loss = float('inf')
     start_time = time.time()
     patience = config.get('early_stop_patience', 5)
@@ -103,7 +121,7 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
         train_loss_total = 0.0
         train_batches = 0
 
-        for batch_idx, (batch_x, _) in enumerate(train_loader):
+        for batch_idx, (batch_x, _, _) in enumerate(train_loader):
             batch_x = batch_x.to(device, non_blocking=True)
 
             # Gradient accumulation
@@ -112,13 +130,14 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
                 n = batch_x.shape[0] // config['accumulation_steps']
                 sub_x = batch_x[j * n:(j + 1) * n]
 
-                zs, bsq_loss, _, _ = model(sub_x)
-                z_pre, z = zs
+                with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=use_amp):
+                    zs, bsq_loss, _, _ = model(sub_x)
+                    z_pre, z = zs
 
-                recon_loss_pre = F.mse_loss(z_pre, sub_x)
-                recon_loss_all = F.mse_loss(z, sub_x)
-                recon_loss = recon_loss_pre + recon_loss_all
-                loss = (recon_loss + bsq_loss) / 2
+                    recon_loss_pre = F.mse_loss(z_pre, sub_x)
+                    recon_loss_all = F.mse_loss(z, sub_x)
+                    recon_loss = recon_loss_pre + recon_loss_all
+                    loss = (recon_loss + bsq_loss) / 2
                 (loss / config['accumulation_steps']).backward()
                 accum_loss += loss.item()
 
@@ -141,8 +160,8 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
         model.eval()
         val_loss_total = 0.0
         val_samples = 0
-        with torch.no_grad():
-            for batch_x, _ in val_loader:
+        with torch.no_grad(), torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=use_amp):
+            for batch_x, _, _ in val_loader:
                 batch_x = batch_x.to(device, non_blocking=True)
                 zs, _, _, _ = model(batch_x)
                 _, z = zs
@@ -183,6 +202,8 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
         'total_time_h': total_time / 3600,
         'epochs': config['epochs'],
         'n_params': n_params,
+        'amp_bf16': use_amp,
+        'batch_size': config['batch_size'],
     }
     with open(os.path.join(save_dir, 'summary.json'), 'w') as f:
         json.dump(summary, f, indent=2)
@@ -202,6 +223,8 @@ def main():
                         help='Device for training')
     parser.add_argument('--epochs', type=int, default=0,
                         help='Override epochs (0 = use config default)')
+    parser.add_argument('--no-amp', action='store_true',
+                        help='Disable bf16 AMP')
     args = parser.parse_args()
 
     config = TdxFineTuneConfig()
@@ -209,6 +232,8 @@ def main():
 
     if args.epochs > 0:
         cfg['epochs'] = args.epochs
+    if args.no_amp:
+        cfg['use_amp'] = False
 
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")

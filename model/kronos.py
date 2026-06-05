@@ -196,7 +196,8 @@ class Kronos(nn.Module, PyTorchModelHubMixin):
         learn_te (bool): Whether to use learnable temporal embeddings.
     """
 
-    def __init__(self, s1_bits, s2_bits, n_layers, d_model, n_heads, ff_dim, ffn_dropout_p, attn_dropout_p, resid_dropout_p, token_dropout_p, learn_te):
+    def __init__(self, s1_bits, s2_bits, n_layers, d_model, n_heads, ff_dim, ffn_dropout_p, attn_dropout_p, resid_dropout_p, token_dropout_p, learn_te,
+                 iib_cov_dim=7, iib_hidden_dim=256, iib_dropout=None, iib_n_layers=1):
         super().__init__()
         self.s1_bits = s1_bits
         self.s2_bits = s2_bits
@@ -221,9 +222,12 @@ class Kronos(nn.Module, PyTorchModelHubMixin):
         self.norm = RMSNorm(self.d_model)
         self.dep_layer = DependencyAwareLayer(self.d_model)
         self.head = DualHead(self.s1_bits, self.s2_bits, self.d_model)
-        # IIB: Input Injection Block — 协变量残差注入
+        # IIB: Input Injection Block — 协变量残差注入（可配置深度/宽度）
+        actual_iib_dropout = iib_dropout if iib_dropout is not None else self.ffn_dropout_p
         self.iib = InputInjectionBlock(
-            d_model=self.d_model, cov_dim=7, hidden_dim=256, dropout=self.ffn_dropout_p
+            d_model=self.d_model, cov_dim=iib_cov_dim,
+            hidden_dim=iib_hidden_dim, dropout=actual_iib_dropout,
+            n_layers=iib_n_layers,
         )
         self.apply(self._init_weights)
 

@@ -10,6 +10,7 @@ Kronos + CZSC 协变量注入模块。
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from czsc._native import CZSC, RawBar, Freq, Mark, Direction, ZS
 
@@ -24,23 +25,41 @@ class InputInjectionBlock(nn.Module):
     借鉴 ChronosX 的 InputInjectionBlock 设计，适配 Kronos 的 d_model=832。
     当 covariates=None 时，forward 返回零张量，对主模型无任何影响。
 
-    参数量 ~560K，占 Kronos 总参数量 (102.3M) 的 0.55%。
+    支持 n_layers 参数控制残差 MLP 深度：
+        n_layers=1: 单层 FFN（旧架构，向后兼容），~560K 参数
+        n_layers=2: 2 层残差 MLP + LayerNorm（升级架构），~956K 参数
     """
 
-    def __init__(self, d_model=832, cov_dim=7, hidden_dim=256, dropout=0.1):
+    def __init__(self, d_model=832, cov_dim=7, hidden_dim=256, dropout=0.1, n_layers=1):
         super().__init__()
         self.d_model = d_model
         self.cov_dim = cov_dim
         self.hidden_dim = hidden_dim
+        self.n_layers = n_layers
 
         self.emb_proj = nn.Linear(d_model, hidden_dim, bias=True)
         self.cov_proj = nn.Linear(cov_dim, hidden_dim, bias=True)
-        self.ffn = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim, bias=True),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, d_model, bias=True),
-        )
+
+        if n_layers <= 1:
+            # 旧架构：单层 FFN（向后兼容）
+            self.ffn = nn.Sequential(
+                nn.Linear(hidden_dim * 2, hidden_dim, bias=True),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, d_model, bias=True),
+            )
+        else:
+            # 升级架构：多层残差 MLP + LayerNorm
+            self.residual_layers = nn.ModuleList()
+            for _ in range(n_layers):
+                self.residual_layers.append(nn.ModuleDict({
+                    'norm': nn.LayerNorm(hidden_dim),
+                    'w1': nn.Linear(hidden_dim, hidden_dim * 2, bias=True),
+                    'w2': nn.Linear(hidden_dim * 2, hidden_dim, bias=True),
+                    'drop': nn.Dropout(dropout),
+                }))
+            self.out_proj = nn.Linear(hidden_dim, d_model, bias=True)
+            self.out_drop = nn.Dropout(dropout)
 
     def forward(self, token_embeddings, covariates=None):
         """
@@ -52,10 +71,24 @@ class InputInjectionBlock(nn.Module):
         """
         if covariates is None:
             return torch.zeros_like(token_embeddings)
+
         emb_h = self.emb_proj(token_embeddings)   # [B, T, hidden]
         cov_h = self.cov_proj(covariates)          # [B, T, hidden]
-        combined = torch.cat([emb_h, cov_h], dim=-1)  # [B, T, hidden*2]
-        return self.ffn(combined)                   # [B, T, d_model]
+
+        if self.n_layers <= 1:
+            # 旧架构：concat → FFN
+            combined = torch.cat([emb_h, cov_h], dim=-1)  # [B, T, hidden*2]
+            return self.ffn(combined)                       # [B, T, d_model]
+        else:
+            # 升级架构：add → 残差 MLP
+            h = emb_h + cov_h                              # [B, T, hidden]
+            for layer in self.residual_layers:
+                residual = h
+                h = layer['norm'](h)
+                h = F.gelu(layer['w1'](h))
+                h = layer['drop'](layer['w2'](h))
+                h = residual + h
+            return self.out_drop(self.out_proj(h))          # [B, T, d_model]
 
 
 # ======================================================================
@@ -251,7 +284,9 @@ def get_beichi(bi_list, current_bi):
             break
     if prev is None:
         return 0.0
-    diff = (prev.power - current_bi.power) / (prev.power + 1e-8)
+    # tanh 软裁剪：防止 prev.power 接近零时产生极端异常值
+    raw_diff = prev.power - current_bi.power
+    diff = np.tanh(raw_diff / (abs(prev.power) + abs(current_bi.power) + 1e-8))
     # 向下笔力度减弱 = 底背驰 = 正值（买）
     # 向上笔力度减弱 = 顶背驰 = 负值（卖）
     if current_bi.direction == Direction.Down:
