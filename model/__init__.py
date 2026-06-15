@@ -1,4 +1,4 @@
-__version__ = "1.6.4"
+__version__ = "1.6.8"
 
 from .kronos import KronosTokenizer, Kronos, KronosPredictor
 from .covariate import InputInjectionBlock, CZSCFeatureExtractor

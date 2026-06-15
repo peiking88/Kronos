@@ -18,6 +18,7 @@
 """
 
 import argparse, os, sys, pickle, json, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -36,19 +37,31 @@ from scripts.calibrate import backtest_calibrate
 # ---------------------------------------------------------------------------
 FACTOR_DIR = os.path.expanduser("~/.local/share/tdxcfv/drive_c/tc/.factor_cache")
 FACTOR_CACHE_1D = os.path.join(FACTOR_DIR, ".factor_1d.json")
+FACTOR_CACHE_DAYS = 30        # 复权因子缓存有效期（一个月）
+FACTOR_WORKERS = 4            # 复权因子并发获取线程数（避免限速）
+
+
+def _cache_month_key(date_str):
+    """从 'YYYY-MM-DD' 字符串提取 'YYYY-MM' 月份键，无法解析时返回 None。"""
+    try:
+        key = date_str[:7]
+        return key if len(key) == 7 else None
+    except Exception:
+        return None
 
 
 def prefetch_factors(codes, fresh_cache):
-    """批量获取复权因子（1日缓存）。
+    """批量获取复权因子（一个月缓存，4线程并发）。
 
-    先检查本地 JSON 缓存（当日有效），命中则跳过 derive_factor 的网络/TDX 读取。
-    因子完整后再返回，供后续预测使用。
+    先检查本地 JSON 缓存（同月内有效），命中则跳过 derive_factor 的网络/TDX 读取。
+    未命中的代码用 ThreadPoolExecutor(4) 并发推导因子，避免被数据源限速。
+    若最新因子获取失败（返回 1.0）但存在旧缓存，则回退使用旧缓存值。
 
     返回: {code: (factor: float, ok: bool)}
         ok=True  因子有效（非 1.0 或是指数）
         ok=False 因子获取失败，需用后复权价格输出
     """
-    # 读取 1 日缓存
+    # 读取缓存
     cache = {}
     if os.path.exists(FACTOR_CACHE_1D):
         try:
@@ -57,33 +70,56 @@ def prefetch_factors(codes, fresh_cache):
         except Exception:
             cache = {}
     today_str = str(datetime.now().date())
+    this_month = _cache_month_key(today_str)
 
     result = {}
+    need_fetch = []  # 缓存过期/缺失的个股代码
+
     for code in codes:
         # 指数直接跳过
         if classify_code(code):
             result[code] = (1.0, True)
             continue
 
-        # 命中当日缓存
         cached = cache.get(code)
-        if cached and cached.get("date") == today_str:
+        if cached and _cache_month_key(cached.get("date", "")) == this_month:
             factor = cached["factor"]
             ok = factor != 1.0
             result[code] = (factor, ok)
-            print(f"  {code}: 复权因子(1日缓存)={factor:.4f}")
+            print(f"  {code}: 复权因子(缓存)={factor:.4f}")
             continue
 
-        # 推导因子
-        df = fresh_cache.get(code) if fresh_cache else None
-        if df is None:
-            df = get_data(code)
-        factor = derive_factor(code, df, verbose=False) if df is not None else 1.0
-        ok = factor != 1.0
-        result[code] = (factor, ok)
+        need_fetch.append(code)
 
-        # 写入缓存
-        cache[code] = {"factor": factor, "date": today_str}
+    # 并发推导未命中代码的因子
+    if need_fetch:
+        print(f"  并发获取复权因子: {len(need_fetch)} 只, {FACTOR_WORKERS} 线程")
+
+        def _fetch_one(code):
+            """单只股票因子推导（worker 内独立调用，mootdx 连接每次新建）。"""
+            try:
+                df = fresh_cache.get(code) if fresh_cache else None
+                if df is None:
+                    df = get_data(code)
+                factor = derive_factor(code, df, verbose=False) if df is not None else 1.0
+            except Exception as e:
+                print(f"  {code}: 因子推导异常 {type(e).__name__}: {e}", file=sys.stderr)
+                factor = 1.0
+            return code, factor
+
+        with ThreadPoolExecutor(max_workers=FACTOR_WORKERS) as executor:
+            futures = {executor.submit(_fetch_one, code): code for code in need_fetch}
+            for future in as_completed(futures):
+                code, factor = future.result()
+                # 获取不到最新因子时，回退使用已缓存旧数据
+                if factor == 1.0:
+                    old = cache.get(code)
+                    if old and old.get("factor", 1.0) != 1.0:
+                        print(f"  {code}: 最新因子获取失败，使用旧缓存 {old['factor']:.4f}",
+                              file=sys.stderr)
+                        factor = old["factor"]
+                result[code] = (factor, factor != 1.0)
+                cache[code] = {"factor": factor, "date": today_str}
 
     # 持久化缓存
     os.makedirs(FACTOR_DIR, exist_ok=True)
