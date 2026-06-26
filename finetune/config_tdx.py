@@ -88,10 +88,9 @@ class TdxFineTuneConfig:
         self.use_amp = True  # bf16 AMP for training (RTX 5080 原生 bf16)
 
         # =================================================================
-        # Phase Control — 两阶段训练
+        # Phase Control
         # =================================================================
-        self.phase = 'full'                # 'full'=Phase1 全参数微调, 'iib'=Phase2 IIB训练
-        self.phase1_epochs = 10            # Phase 1 epoch 数（热身，不宜过多）
+        self.phase1_epochs = 10            # Phase 1 epoch 数
 
         # =================================================================
         # Model Paths — downloaded from HuggingFace via hf-mirror.com
@@ -118,24 +117,7 @@ class TdxFineTuneConfig:
         )
 
         # =================================================================
-        # IIB (Input Injection Block) 配置
-        # =================================================================
-        self.use_iib = True                        # 是否启用 IIB 协变量注入
-        self.cov_dim = 7                           # 协变量维度（CZSC 7 维特征）
-        self.iib_hidden_dim = 256                  # IIB 内部隐藏维度
-        self.iib_dropout = 0.3                     # IIB dropout（从 0.1 提高）
-        self.iib_n_layers = 2                      # IIB 残差 MLP 层数（从 1 升级）
-        self.iib_learning_rate = 3e-4              # IIB 学习率（从 1e-3 降低）
-        self.iib_weight_decay = 0.2                # IIB 权重衰减
-        self.freeze_predictor = True               # 冻结 Kronos 主体，仅训练 IIB
-        self.czsc_cache_path = os.path.join(self.dataset_path, "czsc_features")
-
-        # 渐进式解冻（Phase 2）
-        self.iib_only_epochs = 5                   # Stage A: 仅训练 IIB
-        self.iib_plus_top_epochs = 5               # Stage B: IIB + 后 4 层
-        self.transformer_top_lr = 1e-5             # Stage B/C 顶层学习率
-        self.transformer_base_lr = 5e-6            # Stage C 全参数学习率（极低）
-
+        # Experiment Logging & Saving
         # =================================================================
         # Backtesting
         # =================================================================

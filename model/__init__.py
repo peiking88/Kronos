@@ -1,14 +1,11 @@
-__version__ = "1.6.8"
+__version__ = "1.6.9"
 
 from .kronos import KronosTokenizer, Kronos, KronosPredictor
-from .covariate import InputInjectionBlock, CZSCFeatureExtractor
 
 model_dict = {
     'kronos_tokenizer': KronosTokenizer,
     'kronos': Kronos,
-    'kronos_predictor': KronosPredictor,
-    'input_injection_block': InputInjectionBlock,
-    'czsc_feature_extractor': CZSCFeatureExtractor,
+    'kronos_predictor': KronosPredictor
 }
 
 

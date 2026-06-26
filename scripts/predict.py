@@ -32,7 +32,6 @@ import mootdx  # noqa: F401
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from model import Kronos, KronosTokenizer, KronosPredictor
-from model.covariate import CZSCFeatureExtractor
 from scripts.calibrate import backtest_calibrate
 
 # ── 常量 ──────────────────────────────────────────────
@@ -158,16 +157,6 @@ def run_predict(predictor, df, pred_len, temperature, top_p, sample_count):
 
     print(f"预测 {pred_len} 个交易日 (从 {y_timestamp[0].date()} 起)...")
 
-    # 计算 CZSC 特征
-    past_covariates = None
-    try:
-        extractor = CZSCFeatureExtractor()
-        cov_df = x_df.rename(columns={"volume": "vol", "amount": "amt"})
-        cov_features = extractor.extract(cov_df)  # [LOOKBACK, 7]
-        past_covariates = cov_features[np.newaxis, :, :]  # [1, LOOKBACK, 7]
-    except Exception:
-        pass  # CZSC 提取失败时退化为无协变量预测
-
     with torch.no_grad():
         pred_df = predictor.predict(
             df=x_df,
@@ -178,7 +167,6 @@ def run_predict(predictor, df, pred_len, temperature, top_p, sample_count):
             top_p=top_p,
             sample_count=sample_count,
             verbose=True,
-            past_covariates=past_covariates,
         )
 
     pred_df = pred_df.copy()

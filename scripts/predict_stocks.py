@@ -31,7 +31,6 @@ from mootdx.quotes import Quotes as _MootdxQuotes
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from model.kronos import KronosTokenizer, Kronos, KronosPredictor
-from model.covariate import CZSCFeatureExtractor
 from scripts.calibrate import backtest_calibrate
 
 # ---------------------------------------------------------------------------
@@ -485,21 +484,10 @@ def run_prediction(predictor, df, factor):
     x_ts = pd.Series(pd.to_datetime(context.index).values, name="timestamps")
     y_ts = pd.Series(future.values)
 
-    # 计算 CZSC 特征
-    past_covariates = None
-    try:
-        extractor = CZSCFeatureExtractor()
-        cov_df = context.rename(columns={"volume": "vol", "amount": "amt"})
-        cov_features = extractor.extract(cov_df)  # [LOOKBACK, 7]
-        past_covariates = cov_features[np.newaxis, :, :]  # [1, LOOKBACK, 7]
-    except Exception:
-        pass  # CZSC 提取失败时退化为无协变量预测
-
     pred = predictor.predict(
         df=context, x_timestamp=x_ts, y_timestamp=y_ts,
         pred_len=PRED_LEN, T=T, top_p=TOP_P,
-        sample_count=SAMPLE_COUNT, verbose=False,
-        past_covariates=past_covariates
+        sample_count=SAMPLE_COUNT, verbose=False
     )
 
     last_close_actual = float(last_close) / factor
@@ -525,7 +513,6 @@ def run_backtest(predictor, df, factor):
     total_w = len(df) - LOOKBACK - PRED_LEN
     step = max(1, total_w // BACKTEST_WINDOWS)
     results = []
-    extractor = CZSCFeatureExtractor()
 
     for i in range(0, total_w, step):
         ctx = df.iloc[i:i + LOOKBACK]
@@ -533,21 +520,12 @@ def run_backtest(predictor, df, factor):
         if len(act) < PRED_LEN:
             break
         try:
-            # 计算 CZSC 特征
-            cov = None
-            try:
-                cov_df = ctx.rename(columns={"volume": "vol", "amount": "amt"})
-                cov = extractor.extract(cov_df)[np.newaxis, :, :]
-            except Exception:
-                pass
-
             p = predictor.predict(
                 df=ctx,
                 x_timestamp=pd.Series(pd.to_datetime(ctx.index).values),
                 y_timestamp=pd.Series(pd.to_datetime(act.index).values),
                 pred_len=PRED_LEN, T=T, top_p=TOP_P,
-                sample_count=BACKTEST_SAMPLE_COUNT, verbose=False,
-                past_covariates=cov
+                sample_count=BACKTEST_SAMPLE_COUNT, verbose=False
             )
             for d in range(PRED_LEN):
                 pc = p["close"].iloc[d]
