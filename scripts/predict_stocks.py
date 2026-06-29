@@ -237,10 +237,6 @@ def parse_zxg_blk(path=ZXG_BLK):
     return codes
 
 
-def fetch_stock_names(codes):
-    """获取股票名称（TDengine 无名称表，返回代码作为名称）。"""
-    return {c: c for c in codes}
-
 
 def classify_code(code):
     """判断是否为指数代码。"""
@@ -813,9 +809,6 @@ def main():
     device = torch.device(args.device)
     print(f"Device: {device}")
 
-    print("获取股票名称...")
-    name_map = fetch_stock_names(codes)
-
     fresh_cache = {} if args.no_import else ensure_fresh_data(codes)
 
     print("获取复权因子...")
@@ -858,25 +851,24 @@ def main():
             factor, _ = factors.get(code, (None, False))
             result = process_single(code, predictor, fresh_cache, factor=factor)
         except Exception as e:
-            errors.append(f"{name_map.get(code, code)} ({code}): {type(e).__name__}: {e}")
+            errors.append(f"{code}: {type(e).__name__}: {e}")
             continue
 
         if "error" in result:
-            errors.append(f"{name_map.get(code, code)} ({code}): {result['error']}")
+            errors.append(f"{code}: {result['error']}")
             continue
 
-        name = name_map.get(code, code)
         fwd = result["forward"]
-        all_forward[code] = {"name": name, "rows": fwd["rows"], "base": fwd["base"],
+        all_forward[code] = {"name": code, "rows": fwd["rows"], "base": fwd["base"],
                              "factor": fwd["factor"], "bias_correction": fwd["bias_correction"],
                              "consensus_count": fwd.get("consensus_count"),
                              "consensus_directions": fwd.get("consensus_directions")}
         bt = result["backtest"]
-        all_bt[code] = {"name": name, "metrics": bt["metrics"], "windows": bt["windows"]}
+        all_bt[code] = {"name": code, "metrics": bt["metrics"], "windows": bt["windows"]}
         conf = result["confidence"]
-        all_conf[code] = {"name": name, "conf": conf["conf"], "base": conf["base"]}
+        all_conf[code] = {"name": code, "conf": conf["conf"], "base": conf["base"]}
         if not result.get("factor_ok", True):
-            errors.append(f"{name} ({code}): 复权因子获取失败，输出为后复权价格")
+            errors.append(f"{code}: 复权因子获取失败，输出为后复权价格")
 
         final_chg = fwd["rows"][-1]["cum_chg"]
         stab = check_stability(code, final_chg, last_preds)

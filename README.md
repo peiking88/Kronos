@@ -532,3 +532,29 @@ This project is licensed under the [MIT License](./LICENSE).
  tdxdata/tdxdata/core/registry.py                   |   3 -
 ```
 
+
+### 2026-06-29 (预测脚本精简)
+
+精简 `scripts/predict_stocks.py`：
+- 删除 `fetch_stock_names()` 无操作函数，预测流程直接使用股票代码
+- 移除 `name_map` 变量，消除 `sh600000 (sh600000)` 冗余输出
+- 复权因子确认从 TDengine 获取，无需网络下载
+
+### 2026-06-29 09:23:46
+```
+ .claude/skills/check-kronos-env/SKILL.md                     |   8 +-
+ .claude/skills/finetune-kronos/SKILL.md                      | 158 +++++---------------
+ .claude/skills/finetune-kronos/references/lessons-learned.md |  95 +++---------
+ .claude/skills/finetune-kronos/scripts/tdx_import.py         | 648 ++++++++++++++++++++++++++++++++++++++-------------------------------------------
+ CLAUDE.md                                                    |   6 +-
+ README.md                                                    |  24 ---
+ docs/fusion_czsc_plan.md                                     | 509 ----------------------------------------------------------------
+ docs/prediction_data_files.md                                |  44 +++---
+ docs/scripts_guide.md                                        |  19 ++-
+ docs/two_phase_finetune_plan.md                              | 237 ------------------------------
+ finetune/train_predictor_tdx.py                              | 147 ++++++++++++++++++-
+ finetune/train_tokenizer_tdx.py                              |   7 +-
+ model/__init__.py                                            |   2 +-
+ pyproject.toml                                               |   6 +-
+ requirements.txt                                             |   5 +-
+```
