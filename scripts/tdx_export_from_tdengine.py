@@ -28,11 +28,11 @@ def get_all_stocks(conn) -> dict[str, str]:
     for row in r:
         tbname = row[0]  # k_000001_1d
         code = tbname.split('_')[1]
-        if code.startswith(('60', '68')):
+        if code.startswith(('60', '68', '5')):  # 上交所主板/科创/ETF(5xxx)
             code_map[code] = f'sh{code}'
-        elif code.startswith(('00', '30', '12', '16', '15')):
+        elif code.startswith(('00', '30', '12', '16', '15', '18', '39')):  # 深交所主板/创业/ETF/LOF/封基/指数(39)
             code_map[code] = f'sz{code}'
-        elif code.startswith(('8', '4', '9')):
+        elif code.startswith(('8', '4', '9')):  # 北交所
             code_map[code] = f'bj{code}'
         else:
             code_map[code] = code

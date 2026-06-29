@@ -558,3 +558,11 @@ This project is licensed under the [MIT License](./LICENSE).
  pyproject.toml                                               |   6 +-
  requirements.txt                                             |   5 +-
 ```
+
+### 2026-06-29
+
+修复: 导出脚本补全 ETF/基金/指数代码前缀映射
+
+- `scripts/tdx_export_from_tdengine.py` — `get_all_stocks()` 新增 sh(`5`), sz(`18`,`39`) 前缀
+- 修复 sh520620, sh589960, sz159731 等 ETF/基金/指数无法导出问题
+- 全部 5286 只 TDengine 代码覆盖验证通过
