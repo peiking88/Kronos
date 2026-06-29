@@ -1,17 +1,17 @@
 ---
 name: finetune-kronos
 description: >
-  Kronos 模型 TDX（通达信）本地数据微调全流程：两阶段训练（全参数→IIB+CZSC）、
-  bf16 AMP、渐进式解冻、A股后复权日线。当用户提到 Kronos fine-tuning、TDX 数据导入、
+  Kronos 模型 TDX（通达信）本地数据微调全流程：单阶段全参数微调、
+  bf16 AMP、A股后复权日线。当用户提到 Kronos fine-tuning、TDX 数据导入、
   微调模型、后复权日线、训练 tokenizer/predictor、预测 A 股、续训/更新权重、
-  模型训练、IIB/CZSC 协变量、渐进式解冻时使用此技能。
+  模型训练时使用此技能。
   即使只提"微调"或"TDX数据"而不提 Kronos，也应触发。
 ---
 
-# TDX本地数据 微调 Kronos（两阶段训练）
+# TDX本地数据 微调 Kronos（单阶段全参数微调）
 
 基于 TDX（通达信）本地历史数据的 Kronos 模型领域自适应微调流程。
-采用**两阶段训练策略**：Phase 1 全参数微调适配 A 股分布，Phase 2 IIB+CZSC 协变量注入 + 渐进式解冻。
+采用**单阶段全参数微调**策略，bf16 AMP 加速。
 
 ## 适用场景与前提仓库
 
@@ -27,13 +27,11 @@ cd Kronos
 
 | 文件                              | 作用                                           |
 | --------------------------------- | ---------------------------------------------- |
-| `finetune/config_tdx.py`          | 单卡微调配置（后复权、TDX 时间范围、两阶段参数） |
+| `finetune/config_tdx.py`          | 单卡微调配置（后复权、TDX 时间范围）             |
 | `finetune/train_tokenizer_tdx.py` | Tokenizer 单卡训练（bf16 AMP）                 |
-| `finetune/train_predictor_tdx.py` | Predictor 两阶段训练（bf16 AMP + 渐进式解冻）  |
-| `finetune/dataset.py`             | 数据集加载器（CZSC 协变量支持）                |
-| `model/covariate.py`              | IIB 模块 + CZSC 特征提取器                     |
+| `finetune/train_predictor_tdx.py` | Predictor 单阶段训练（bf16 AMP）               |
+| `finetune/dataset.py`             | 数据集加载器                                    |
 | `model/kronos.py`                 | Kronos/KronosTokenizer 模型定义                |
-| `scripts/build_czsc_cache.py`     | CZSC 7 维特征预计算缓存                        |
 
 ## 前置条件
 
@@ -43,11 +41,10 @@ cd Kronos
 | ------------ | ------------------------------------------------------------ | ---------------------------------------------- |
 | GPU          | `nvidia-smi`                                                 | >= 8GB VRAM（推荐 16GB 如 RTX 5080）           |
 | PyTorch CUDA | `python -c "import torch; print(torch.cuda.is_bf16_supported())"` | True（bf16 原生支持）                          |
-| TDX 数据目录 | `ls ~/.local/share/tdxcfv/drive_c/tc/vipdoc/sh/lday/`        | 存在 `.day` 文件                               |
+| TDengine 连接 | `python -c "from taosws import connect; connect()"` | 可连接 |
 | 磁盘空间     | `df -h .`                                                    | >= 2GB（160MB 数据 + 425MB 模型 + 410MB 输出） |
 | HF 镜像      | `curl -s --connect-timeout 5 https://hf-mirror.com`          | 可访问                                         |
-| tdxdata 包   | `python -c "import tdxdata"`                                 | 已安装                                         |
-| czsc 包      | `python -c "from czsc._native import CZSC"`                  | 已安装（CZSC 特征提取依赖）                    |
+| TDengine     | `python -c "from taosws import connect; connect()"`          | 已连接（数据源）                               |
 
 ### 首次环境初始化
 
@@ -61,15 +58,13 @@ echo 'export HF_ENDPOINT=https://hf-mirror.com' >> .venv/bin/activate
 # 3. 激活环境并安装依赖
 source .venv/bin/activate
 pip install -r requirements.txt
-pip install pytest pytest-timeout czsc
-pip install -e /home/li/peiking88/tdxdata
+pip install pytest pytest-timeout
 ```
 
 **关键说明**：
 
 - `HF_ENDPOINT` 必须写入 `activate` 脚本末尾，确保每次激活自动生效。
-- `czsc` 库提供 CZSC 缠论分析，IIB 协变量注入的必要依赖。
-- RTX 5080 (Blackwell) 原生支持 bf16，无需 GradScaler。
+- RTX 5080 (Blackwell) 原生支持 bf16，不需要 GradScaler。
 
 ## 核心决策
 
@@ -78,16 +73,16 @@ pip install -e /home/li/peiking88/tdxdata
 - **复权方式**: 后复权 (hfq/back) — 匹配原始 Kronos Qlib 训练数据约定
 - **模型**: Kronos-Tokenizer-base + Kronos-base（103M 参数）
 - **数据周期**: 日线（1d），其他周期按需重采样
-- **训练策略**: 两阶段——先全参数微调，再 IIB+CZSC 渐进式解冻
+- **训练策略**: 单阶段全参数微调
 - **精度**: bf16 AMP（RTX 5080 原生 bf16，不需要 GradScaler）
 
 ## 执行步骤
 
-按顺序执行以下 5 步。每步完成后验证输出再进入下一步。
+按顺序执行以下 4 步。每步完成后验证输出再进入下一步。
 
 ### Step 1: 数据导入
 
-使用 `scripts/tdx_import.py` 从 TDX 本地文件导入全量 A 股日线数据。
+使用 `scripts/tdx_import.py` 从 TDengine 导入全量 A 股日线数据（后复权由 adjust 表事件实时计算）。
 
 #### 切分原则（相对当前 TDX 数据末日，不要硬抄日期）
 
@@ -136,34 +131,9 @@ for model_id in ['NeoQuasar/Kronos-Tokenizer-base', 'NeoQuasar/Kronos-base']:
 "
 ```
 
-### Step 3: CZSC 特征缓存（Phase 2 必需）
+### Step 3: 微调训练
 
-为每只股票预计算 CZSC 7 维缠论特征。**必须单进程**（`-n 1`）确保 D5 背驰修复生效：
-
-```bash
-.venv/bin/python scripts/build_czsc_cache.py \
-  --data-dir ./data/tdx_import/1d -n 1
-```
-
-**验证**: D5 背驰范围应在 [-1, +1]（tanh 软裁剪）：
-
-```
-D5背驰  0.006  0.308  [-0.76, 0.75]  ← 正常
-D5背驰  -176   29852  [-6000000, 38] ← 异常！需用 -n 1 重建
-```
-
-**故障处理**: 如果 D5 出现极端值（>100），说明多进程 worker 未加载最新代码。删除缓存后用 `-n 1` 重建：
-
-```bash
-rm -f data/tdx_import/1d/czsc_features/czsc_features_*.pkl
-python scripts/build_czsc_cache.py --data-dir data/tdx_import/1d -n 1
-```
-
-### Step 4: 微调训练（两阶段）
-
-#### Phase 1: 全参数微调（无 IIB/CZSC，让模型适配 A 股分布）
-
-**4a. Tokenizer 微调** (30 epochs, ~16 分钟, bf16 AMP)
+#### 3a. Tokenizer 微调 (30 epochs, ~16 分钟, bf16 AMP)
 
 ```bash
 .venv/bin/python finetune/train_tokenizer_tdx.py \
@@ -171,51 +141,21 @@ python scripts/build_czsc_cache.py --data-dir data/tdx_import/1d -n 1
   --epochs 30
 ```
 
-**4b. Predictor 全参数微调** (10 epochs, ~35 分钟, bf16 AMP)
+#### 3b. Predictor 全参数微调 (10 epochs, ~35 分钟, bf16 AMP)
 
 ```bash
 .venv/bin/python finetune/train_predictor_tdx.py \
-  --phase full \
   --data-dir ./data/tdx_import/1d
 ```
 
-**验证**: Phase 1 Val Loss 应稳定下降（不出现过拟合）：
+**验证**: Val Loss 应稳定下降（不出现过拟合）：
 
 ```bash
 cat outputs/tdx_finetune/tdx_predictor/summary.json
-# 期望: best_val_loss ~ 3.0x（全参数 vs IIB-only 的 3.7）
+# 期望: best_val_loss ~ 3.0x（全参数微调，稳定收敛）
 ```
 
-#### Phase 2: IIB + CZSC 渐进式解冻训练
-
-在 Phase 1 基础上注入 CZSC 协变量，三阶段渐进式解冻：
-
-| 阶段 | Epoch | 可训练参数 | 学习率 |
-|------|-------|-----------|--------|
-| A (iib_only) | 1-5 | 仅 IIB (0.93%) | 3e-4 |
-| B (iib_plus_top) | 6-10 | IIB + 后 4 层 + head (33%) | IIB:3e-4, Transformer:1e-5 |
-| C (all) | 11-30 | 全参数 | IIB:3e-4, Top:1e-5, Base:5e-6 |
-
-```bash
-.venv/bin/python finetune/train_predictor_tdx.py \
-  --phase iib \
-  --data-dir ./data/tdx_import/1d
-```
-
-**验证**:
-
-```bash
-cat outputs/tdx_finetune/tdx_predictor/summary.json
-# 期望: best_val_loss ~ 2.8x（比 Phase 1 的 3.0 进一步下降）
-```
-
-**Phase 2 关键特性**：
-- IIB 升级为 2 层残差 MLP + LayerNorm（956K 参数，从 560K 提升）
-- CZSC D5 背驰使用 tanh 软裁剪（消除极端异常值）
-- 从 Phase 1 checkpoint 加载后随机初始化 IIB（干净起点）
-- Stage C 全参数微调使用极低学习率（5e-6），保护 Phase 1 已学到的表示
-
-### Step 5: 预测验证
+### Step 4: 预测验证
 
 ```bash
 # 导入上证指数（不复权）
@@ -234,13 +174,11 @@ cat outputs/tdx_finetune/tdx_predictor/summary.json
 
 - `scripts/tdx_import.py` — TDX 数据导入工具
 - `scripts/discover_stocks.py` — 股票代码枚举
-- `scripts/build_czsc_cache.py` — CZSC 7 维特征预计算缓存
-- `finetune/config_tdx.py` — 两阶段微调配置
+- `finetune/config_tdx.py` — 微调配置
 - `finetune/train_tokenizer_tdx.py` — Tokenizer bf16 AMP 训练
-- `finetune/train_predictor_tdx.py` — Predictor 两阶段训练（`--phase full|iib`）
-- `finetune/dataset.py` — 数据集加载器（CZSC 协变量）
-- `model/covariate.py` — IIB 模块（2层残差MLP）+ CZSC 特征提取器
-- `model/kronos.py` — Kronos/KronosTokenizer 模型定义（支持 IIB 配置参数）
+- `finetune/train_predictor_tdx.py` — Predictor 单阶段训练
+- `finetune/dataset.py` — 数据集加载器
+- `model/kronos.py` — Kronos/KronosTokenizer 模型定义
 
 ### `finetune/config_tdx.py` 关键字段速查
 
@@ -250,42 +188,30 @@ cat outputs/tdx_finetune/tdx_predictor/summary.json
 | `predict_window`                  | 10    | 训练时的预测窗口                    |
 | `dividend_type`                   | "back"| 后复权                              |
 | `batch_size`                      | 128   | Tokenizer 批大小（bf16 AMP）        |
-| `predictor_batch_size`            | 128   | Predictor 批大小（bf16 AMP）        |
+| `predictor_batch_size`            | 64    | Predictor 批大小（bf16 AMP）        |
 | `tokenizer_learning_rate`         | 2e-4  | Tokenizer 学习率                    |
-| `predictor_learning_rate`         | 4e-5  | Phase 1 Predictor 学习率            |
-| `phase`                           | 'full'| 训练阶段 ('full' 或 'iib')          |
-| `phase1_epochs`                   | 10    | Phase 1 epoch 数                    |
-| `iib_n_layers`                    | 2     | IIB 残差 MLP 层数                   |
-| `iib_dropout`                     | 0.3   | IIB dropout                         |
-| `iib_learning_rate`               | 3e-4  | IIB 学习率                          |
-| `iib_only_epochs`                 | 5     | Stage A epoch 数                    |
-| `iib_plus_top_epochs`             | 5     | Stage B epoch 数                    |
-| `transformer_top_lr`              | 1e-5  | Stage B/C 顶层学习率                |
-| `transformer_base_lr`             | 5e-6  | Stage C 全参数学习率                |
-| `use_iib`                         | True  | 是否启用 IIB 协变量注入             |
-| `cov_dim`                         | 7     | CZSC 协变量维度                     |
+| `predictor_learning_rate`         | 4e-5  | Predictor 学习率                    |
+| `epochs`                          | 10    | Predictor epoch 数                  |
 | `use_amp`                         | True  | bf16 AMP 开关                       |
 
 ## 显存配置
 
 在 RTX 5080 16GB 上实测：
 
-| 配置       | Tokenizer    | Predictor (Phase 1) | Predictor (Phase 2) |
-| ---------- | ------------ | ------------------- | ------------------- |
-| Batch size | 128 (bf16)   | 128 (bf16)          | 128 (bf16)          |
-| 显存占用   | ~2.5 GB      | ~10.8 GB            | ~10.8 GB            |
-| 每 Epoch   | 0.5 分钟     | 3.5 分钟            | 2.7-3.5 分钟        |
+| 配置       | Tokenizer    | Predictor |
+| ---------- | ------------ | --------- |
+| Batch size | 128 (bf16)   | 64 (bf16) |
+| 显存占用   | ~2.5 GB      | ~10.8 GB   |
+| 每 Epoch   | 0.5 分钟     | 3.5 分钟   |
 
 8GB GPU（RTX 4060）：降低 `batch_size` 至 32-50，Tokenizer 可保持 bs=64。
 
-## 训练效果对比
+## 训练效果
 
 | 方案 | Val Loss | 说明 |
 |------|----------|------|
 | 预训练 Kronos-base | ~4.2 | HuggingFace 预训练 |
-| IIB-only (旧方案) | 3.73 | ❌ 过拟合，Val Loss 上升 |
-| **Phase 1 全参数微调** | **3.03** | ✅ 10 epoch 稳定下降 |
-| **Phase 2 IIB+CZSC** | **2.78** | ✅ 渐进式解冻，持续改善 |
+| **全参数微调** | **3.03** | ✅ 10 epoch 稳定下降 |
 
 ## 环境重建 / 项目迁移
 
@@ -295,8 +221,7 @@ python3 -m venv .venv
 echo 'export HF_ENDPOINT=https://hf-mirror.com' >> .venv/bin/activate
 source .venv/bin/activate
 pip install -r requirements.txt
-pip install pytest pytest-timeout czsc
-pip install -e /home/li/peiking88/tdxdata
+pip install pytest pytest-timeout
 ```
 
 ## 常见陷阱
@@ -304,11 +229,6 @@ pip install -e /home/li/peiking88/tdxdata
 | 现象 | 根因 | 修复 |
 | ---- | ---- | ---- |
 | `from_pretrained` 报 positional arguments 错误 | `config.json` 下载失败，HF 不可达 | 确认 `HF_ENDPOINT` 已写入 activate |
-| CZSC D5 出现极端值 (>100) | 多进程 worker 未加载最新代码 | 用 `-n 1` 单进程重建缓存 |
-| Phase 1 Val Loss 上升 | 仅训练 IIB 导致过拟合 | 使用 `--phase full` 全参数微调 |
-| Phase 2 IIB 不收敛 | 学习率过高 (>1e-3) 或 dropout 过低 | iib_lr=3e-4, iib_dropout=0.3 |
-| `No module named 'czsc._native'` | czsc 版本不包含 native 模块 | `pip install czsc --upgrade` |
-
-## 实践经验
-
-详见 `references/lessons-learned.md`。
+| Val Loss 上升 | 学习率过高或 batch 太小 | lr=4e-5, bs=64 |
+| GPU OOM | Batch size 超出显存 | 降低 bs 至 32-50 |
+| 复权因子缓存不一致 | 行情修复导致因子漂移 | 删除缓存重导数据 |

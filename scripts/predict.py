@@ -9,7 +9,7 @@ Kronos 一键预测脚本
     python scripts/predict.py --model base 600000
 
 功能:
-    1. 从 TDX 本地数据导入指定股票最新行情
+    1. 从 TDengine 导入指定股票最新行情
     2. Kronos 模型预测未来 N 日走势
     3. 回测计算模型偏差值（不自动修正）
     4. 应用涨跌停约束
@@ -17,25 +17,18 @@ Kronos 一键预测脚本
 """
 import argparse
 import os
-import pickle
-import subprocess
 import sys
-import tempfile
 
 import numpy as np
 import pandas as pd
 import torch
-
-# Pre-import mootdx/opentdx before sys.path modification to avoid
-# namespace package conflict with ~/peiking88/opentdx/ directory.
-import mootdx  # noqa: F401
+from taosws import connect
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from model import Kronos, KronosTokenizer, KronosPredictor
 from scripts.calibrate import backtest_calibrate
 
 # ── 常量 ──────────────────────────────────────────────
-TDX_DEFAULT = os.path.expanduser("~/.local/share/tdxcfv/drive_c/tc/")
 TOKENIZER_ID = "NeoQuasar/Kronos-Tokenizer-base"
 MODEL_MAP = {
     "mini":  "NeoQuasar/Kronos-mini",
@@ -44,42 +37,104 @@ MODEL_MAP = {
 }
 LOOKBACK = 400
 LIMIT_RATE = 0.10
-BACKTEST_DAYS = 60      # 回测校准窗口（约三个月交易日）
-BACKTEST_CTX = 400       # 回测上下文天数
-FACTOR_DIR = os.path.expanduser("~/.local/share/tdxcfv/drive_c/tc/.factor_cache")
+BACKTEST_DAYS = 60
+BACKTEST_CTX = 400
 
 
-# ── 工具函数 ──────────────────────────────────────────
-def _load_factor_df(code):
-    """加载后复权因子 DataFrame，优先本地缓存。"""
-    cache_file = os.path.join(FACTOR_DIR, f"{code}.pkl")
-    if os.path.exists(cache_file):
-        try:
-            f = pd.read_pickle(cache_file)
-            f.index = pd.to_datetime(f.index)
-            if not f.empty:
-                return f
-        except Exception:
-            pass
+# ── TDengine 数据工具 ─────────────────────────────────
+def _query_adjust_events(conn, code: str) -> list[dict]:
+    """查询分红事件。"""
+    events = []
     try:
-        from tdxdata.sources.adjust import fetch_factor
-        from mootdx.quotes import Quotes
-        quotes = Quotes.factory(market='std')
-        factor_df = fetch_factor(code, "hfq", quotes_client=quotes)
-        if factor_df is not None and not factor_df.empty:
-            os.makedirs(FACTOR_DIR, exist_ok=True)
-            factor_df.to_pickle(cache_file)
-            return factor_df
-    except Exception as e:
-        print(f"  警告: 获取 {code} 复权因子失败: {e}")
+        r = conn.query(
+            f"select ts, fenhong, peigujia, songzhuangu, peigu "
+            f"from tdx.a_{code} order by ts"
+        )
+        for row in r:
+            ts, fh, pj, sz, pg = row
+            fh, pj, sz, pg = float(fh), float(pj), float(sz), float(pg)
+            if fh > 0 or sz > 0 or pg > 0:
+                events.append({
+                    'date': pd.Timestamp(ts).tz_localize(None),
+                    'fenhong': fh,
+                    'peigujia': pj,
+                    'songzhuangu': sz,
+                    'peigu': pg,
+                })
+    except Exception:
+        pass
+    return events
+
+
+def _compute_back_adjust_factor(df: pd.DataFrame, events: list[dict]) -> np.ndarray:
+    """从分红事件计算后复权因子。"""
+    n = len(df)
+    factor = np.ones(n, dtype=np.float64)
+    if not events:
+        return factor
+
+    events_sorted = sorted(events, key=lambda e: e['date'])
+    df_dates = df.index.values
+    raw_close = df['close'].values
+
+    for evt in events_sorted:
+        evt_date = np.datetime64(evt['date'])
+        event_idx = int(np.searchsorted(df_dates, evt_date))
+        if event_idx >= n:
+            continue
+        prev_idx = event_idx - 1
+        if prev_idx < 0:
+            continue
+        C_before = raw_close[prev_idx]
+        if C_before <= 0:
+            continue
+
+        D = evt['fenhong'] / 10.0
+        S = evt['songzhuangu'] / 10.0
+        P = evt['peigu'] / 10.0
+        Pp = evt['peigujia']
+
+        denominator = C_before - D + P * Pp
+        if denominator <= 0:
+            continue
+        multiplier = C_before * (1.0 + S + P) / denominator
+        if abs(multiplier - 1.0) < 1e-12:
+            continue
+        factor[:event_idx] *= multiplier
+    return factor
+
+
+def _apply_adjustment(df: pd.DataFrame, factor: np.ndarray) -> pd.DataFrame:
+    """应用后复权因子到 OHLC。"""
+    df_adj = df.copy()
+    for col in ['open', 'high', 'low', 'close']:
+        if col in df_adj.columns:
+            df_adj[col] = (df_adj[col].values * factor).astype(np.float32)
+    df_adj['vol'] = df_adj['vol'].astype(np.float32)
+    df_adj['amt'] = df_adj['amt'].astype(np.float32)
+    return df_adj
+
+
+def _get_latest_trading_date() -> str | None:
+    """从 TDengine 获取最新交易日期。"""
+    conn = connect()
+    try:
+        r = conn.query(
+            "select last_row(ts) from tdx.k_000001_1d"
+        )
+        rows = list(r)
+        if rows:
+            ts = pd.Timestamp(rows[0][0]).tz_localize(None)
+            return ts.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    finally:
+        conn.close()
     return None
 
 
-def normalize_symbol(raw: str) -> str:
-    """将用户输入的代码标准化为 (market, symbol, tdx_key) 三元组。
-
-    接受格式: 600000 / sh600000 / sz002741 / 000001
-    """
+def normalize_symbol(raw: str) -> tuple[str, str, str]:
+    """将用户输入的代码标准化为 (market, code, tdx_key)。"""
     raw = raw.strip().lower()
     if raw.startswith("sh"):
         market, code = "sh", raw[2:]
@@ -92,46 +147,46 @@ def normalize_symbol(raw: str) -> str:
     return market, code, f"{market}{code}"
 
 
-def import_from_tdx(tdx_key: str, tdxdir: str, end_date: str):
-    """从 TDX 本地数据导入单只股票日线（后复权），返回 (DataFrame, factor)。
+def import_from_tdx(tdx_key: str, end_date: str):
+    """从 TDengine 导入单只股票日线（后复权），返回 (DataFrame, factor)。
 
-    模型使用后复权数据训练，因此推理输入也必须是后复权价格。
-    factor 用于将预测结果从后复权空间换算回实际市场价格。
+    后复权因子由 adjust 表事件实时计算。factor 恒为 1.0（后复权数据末
+    日即实际市场价），保留以兼容下游代码。
     """
-    from mootdx.reader import Reader
-    reader = Reader.factory(market="std", tdxdir=tdxdir)
     code = tdx_key[2:]
-    df = reader.daily(symbol=code)
-    if df is None or df.empty:
-        raise RuntimeError(f"TDX 中未找到 {tdx_key} 的数据")
-    df = df[df.index <= pd.Timestamp(end_date)]
-    df = df[["open", "high", "low", "close", "amount", "volume"]].copy()
-    df.index = pd.to_datetime(df.index)
-
-    # 应用后复权（匹配 Kronos 模型训练数据）
-    factor = 1.0
-    factor_df = _load_factor_df(code)
-    if factor_df is not None and not factor_df.empty:
-        factor_df = factor_df.sort_index()
-        factor = float(factor_df["factor"].iloc[-1])
-        common_dtype = "datetime64[us]"
-        df_tmp = df.copy()
-        df_tmp.index = df_tmp.index.astype(common_dtype)
-        fidx = factor_df.index.astype(common_dtype)
-        merged = pd.merge_asof(
-            df_tmp.reset_index().rename(columns={"index": "date"}),
-            factor_df[["factor"]].set_index(fidx),
-            left_on="date", right_index=True, direction="forward",
+    conn = connect()
+    try:
+        r = conn.query(
+            f"select ts, open, high, low, close, volume, amount "
+            f"from tdx.k_{code}_1d order by ts"
         )
-        merged["factor"] = merged["factor"].ffill().bfill().fillna(1.0)
-        for col in ["open", "high", "low", "close"]:
-            merged[col] = merged[col] * merged["factor"]
-        df = merged.drop(columns=["factor"]).set_index("date")
-        df.index = pd.to_datetime(df.index)
-        print(f"  已应用后复权 (factor={factor:.4f})")
-    else:
-        print(f"  警告: 无复权因子，使用不复权数据（预测偏差可能较大）")
+        rows = list(r)
+        if len(rows) < 100:
+            raise RuntimeError(f"TDengine 中未找到 {tdx_key} 的数据")
 
+        df = pd.DataFrame(
+            rows,
+            columns=['ts', 'open', 'high', 'low', 'close', 'vol', 'amt'],
+        )
+        df['ts'] = pd.to_datetime(df['ts']).dt.tz_localize(None)
+        df = df.set_index('ts').sort_index()
+        df = df.astype({c: np.float64 for c in ['open', 'high', 'low', 'close', 'vol', 'amt']})
+
+        # 后复权
+        events = _query_adjust_events(conn, code)
+        factor_arr = _compute_back_adjust_factor(df, events)
+        df = _apply_adjustment(df, factor_arr)
+
+        # 日期过滤
+        if end_date:
+            df = df[df.index <= pd.Timestamp(end_date)]
+
+        print(f"  已应用后复权 (来自 adjust 表事件)")
+    finally:
+        conn.close()
+
+    # 后复权：末日即市场价，factor=1.0
+    factor = 1.0
     return df, factor
 
 
@@ -207,7 +262,7 @@ def plot_result(hist_df, pred_df, tdx_key, out_html):
 # ── 主流程 ────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
-        description="Kronos 一键预测: 从 TDX 本地数据导入 → 模型预测 → 输出 CSV + 图表",
+        description="Kronos 一键预测: 从 TDengine → 模型预测 → 输出 CSV + 图表",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="示例:\n"
                "  python scripts/predict.py 600000\n"
@@ -217,7 +272,7 @@ def main():
     parser.add_argument("symbols", nargs="+", help="股票代码，如 600000 002741 sh000001")
     parser.add_argument("--pred-len", type=int, default=5, help="预测交易日数 (默认 5)")
     parser.add_argument("--model", choices=MODEL_MAP.keys(), default="base",
-                        help="模型大小: mini/small/base (默认 small)")
+                        help="模型大小: mini/small/base (默认 base)")
     parser.add_argument("--device", default="cpu", help="计算设备 (默认 cpu)")
     parser.add_argument("--temperature", "-T", type=float, default=1.2, help="采样温度 (默认 1.2)")
     parser.add_argument("--top-p", type=float, default=0.95, help="核采样概率 (默认 0.95)")
@@ -225,18 +280,14 @@ def main():
     parser.add_argument("--lookback", type=int, default=LOOKBACK, help="回看天数 (默认 400)")
     parser.add_argument("--no-limit", action="store_true", help="不应用涨跌停约束")
     parser.add_argument("--output-dir", default="outputs", help="输出目录 (默认 outputs)")
-    parser.add_argument("--tdxdir", default=TDX_DEFAULT, help="TDX 数据目录")
     args = parser.parse_args()
 
-    # 获取 TDX 最新交易日期
-    from mootdx.reader import Reader
-    reader = Reader.factory(market="std", tdxdir=args.tdxdir)
-    ref = reader.daily(symbol="000001")
-    end_date = ref.index[-1].strftime("%Y-%m-%d") if ref is not None and not ref.empty else None
+    # 获取 TDengine 最新交易日期
+    end_date = _get_latest_trading_date()
     if not end_date:
-        print("无法确定 TDX 最新交易日期，请检查 TDX 数据目录")
+        print("无法确定 TDengine 最新交易日期，请检查 TDengine 连接")
         sys.exit(1)
-    print(f"TDX 最新交易日: {end_date}\n")
+    print(f"TDengine 最新交易日: {end_date}\n")
 
     os.makedirs(args.output_dir, exist_ok=True)
     today_str = end_date.replace("-", "")
@@ -259,7 +310,7 @@ def main():
 
         # 1. 导入数据（后复权）
         try:
-            df, factor = import_from_tdx(tdx_key, args.tdxdir, end_date)
+            df, factor = import_from_tdx(tdx_key, end_date)
         except Exception as e:
             print(f"导入失败: {e}\n")
             continue
@@ -272,8 +323,7 @@ def main():
             print(f"数据不足: {len(df)} 根 < 回看 {args.lookback}，跳过\n")
             continue
 
-        last_close_hfq = df.iloc[-1]["close"]
-        last_close = last_close_hfq / factor
+        last_close = df.iloc[-1]["close"]
         print(f"数据: {len(df)} 根, 末日期 {df.index[-1].date()}, 收盘 {last_close:.2f}")
 
         # 2. 预测
@@ -286,16 +336,11 @@ def main():
             print(f"预测失败: {e}\n")
             continue
 
-        # 3. 将预测结果从后复权空间换算为实际价格
-        if factor != 1.0:
-            for col in ["open", "high", "low", "close"]:
-                pred_df[col] = pred_df[col] / factor
-
-        # 4. 涨跌停约束（实际价格空间）
+        # 3. 涨跌停约束（后复权数据末日即实际价格）
         if not args.no_limit:
             apply_price_limits(pred_df, last_close, LIMIT_RATE)
 
-        # 5. 回测校准 — 仅计算偏差值，不修改预测
+        # 4. 回测校准
         bias_correction = 0.0
         if not args.no_limit:
             bias_correction = backtest_calibrate(
@@ -303,26 +348,20 @@ def main():
                 temperature=args.temperature, top_p=args.top_p,
                 sample_count=args.samples,
             )
-            # 将 hfq 空间的偏差换算为实际价格空间
-            bias_correction = bias_correction / factor
 
-        # 6. 保存 CSV
+        # 5. 保存 CSV
         out_csv = os.path.join(args.output_dir, f"pred_{tdx_key}_{today_str}.csv")
         pred_df.to_csv(out_csv, index=False, float_format="%.2f")
 
-        # 7. 生成图表（实际价格空间）
-        df_actual = df.copy()
-        if factor != 1.0:
-            for col in ["open", "high", "low", "close"]:
-                df_actual[col] = df_actual[col] / factor
+        # 6. 生成图表
         out_html = os.path.join(args.output_dir, f"pred_{tdx_key}_{today_str}_chart.html")
         try:
-            plot_result(df_actual, pred_df, tdx_key, out_html)
+            plot_result(df, pred_df, tdx_key, out_html)
         except Exception as e:
             print(f"图表生成失败 (可忽略): {e}")
             out_html = None
 
-        # 8. 摘要
+        # 7. 摘要
         pred_first = pred_df.iloc[0]["close"]
         pred_last = pred_df.iloc[-1]["close"]
         chg_first = (pred_first - last_close) / last_close * 100

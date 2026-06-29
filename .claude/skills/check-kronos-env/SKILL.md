@@ -52,7 +52,7 @@ description: "Kronos 项目环境完整性检查与测试运行。检查 Python 
 | flask           | WebUI 后端   | `import flask`           | webui/requirements.txt                        |
 | flask_cors      | 跨域支持     | `import flask_cors`      | webui/requirements.txt                        |
 | plotly          | 图表渲染     | `import plotly`          | webui/requirements.txt                        |
-| tdxdata         | TDX 本地数据 | `import tdxdata`         | editable install (/home/li/peiking88/tdxdata) |
+| taos-ws-py      | TDengine 连接 | `import taosws`          | requirements.txt                              |
 
 **开发依赖**（仅运行测试需要，不在 requirements.txt 中）：
 
@@ -72,8 +72,6 @@ pip install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
 pip install -i https://mirrors.aliyun.com/pypi/simple/ -r webui/requirements.txt
 # 开发依赖
 pip install -i https://mirrors.aliyun.com/pypi/simple/ pytest
-# tdxdata 子包（editable install，不能用镜像）
-pip install -e /home/li/peiking88/tdxdata
 ```
 
 **关于 matplotlib**：`requirements.txt` 中固定了 `matplotlib==3.9.3`，但该版本与 Python 3.14 不兼容（legend RecursionError）。如果安装时报错或 import 失败，可忽略——项目已全面使用 plotly 替代 matplotlib。后续建议从 requirements.txt 中移除 matplotlib。
@@ -155,8 +153,8 @@ PYTHONPATH=. pytest tests/test_kronos_regression.py -v --timeout=550
 | matplotlib legend RecursionError               | Python 3.14 与 matplotlib 3.9.x 不兼容 | 使用 plotly 代替，可从 requirements.txt 移除 matplotlib      |
 | kaleido PNG 导出失败                           | kaleido 1.x 需要浏览器引擎             | 改用 `fig.write_html()`                                      |
 | plotly `add_vline` TypeError                   | pandas 3.x Timestamp 加法不兼容        | 使用 `fig.add_shape()` 代替                                  |
-| `import tdxdata` 失败                          | tdxdata 子包未安装                     | 在项目根目录执行 `pip install -e /home/li/peiking88/tdxdata` |
-| TDX 数据目录不存在                             | 未安装 TDX 客户端或路径不对            | 检查 `~/.local/share/tdxcfv/drive_c/tc/`                     |
+| TDengine 连接失败                              | TDengine 服务未启动或配置错误          | 检查 taosd 服务状态与连接参数                                |
+| `import taosws` 失败                           | taos-ws-py 未安装                      | `pip install taos-ws-py`                                    |
 
 ## 边界情况
 

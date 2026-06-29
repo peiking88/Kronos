@@ -11,14 +11,13 @@
 
 ## 模型
 
-- 上游纯净 Kronos（无 CZSC/IIB 模块）：`model/kronos.py` 来自 `https://github.com/shiyu-coder/Kronos`
-- 已删除文件：`model/covariate.py`、`scripts/build_czsc_cache.py`、`tests/test_covariate.py`
+- 上游纯净 Kronos：`model/kronos.py` 来自 `https://github.com/shiyu-coder/Kronos`
 - 预训练权重：`NeoQuasar/Kronos-Tokenizer-base` + `NeoQuasar/Kronos-base`
 - 下载镜像：`hf-mirror.com`（`HF_ENDPOINT` 写入 `.venv/bin/activate`）
 
 ## 微调
 
-- 单阶段全参数微调（无 IIB/CZSC）
+- 单阶段全参数微调
 - Tokenizer: 30 epochs, bf16
 - Predictor: 10 epochs, bf16, bs=128 可 OOM → 建议 bs=64
 - `finetune/train_predictor_tdx.py` 已精简为仅 full 模式
@@ -31,6 +30,5 @@
 
 ## 已知陷阱
 
-- CZSC C 扩展在部分 A 股上无限挂起 — 已彻底移除
 - HF 缓存 symlink 可能悬空 — 删除 `models--NeoQuasar--*` 后重下
 - GPU 僵尸进程残留 — 训练前用 `nvidia-smi` 确认

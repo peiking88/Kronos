@@ -156,7 +156,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:7070/
 
 ## 二、一键预测脚本 scripts/predict.py
 
-从 TDX 本地数据读取最新行情，使用 Kronos 模型预测未来 N 日走势，输出 CSV 数据文件和交互式 HTML 图表。
+从 TDengine 读取最新行情，使用 Kronos 模型预测未来 N 日走势，输出 CSV 数据文件和交互式 HTML 图表。
 
 ### 基本用法
 
@@ -185,7 +185,6 @@ python scripts/predict.py 600000 002741 600519
 | `--lookback`           | 400                                 | 回看历史天数                                                                        |
 | `--no-limit`           | 关闭                                | 默认开启 ±10% 涨跌停约束，加此选项关闭                                              |
 | `--output-dir`         | outputs                             | 输出目录                                                                            |
-| `--tdxdir`             | `~/.local/share/tdxcfv/drive_c/tc/` | TDX 数据目录                                                                        |
 
 ### 使用示例
 
@@ -243,8 +242,8 @@ HTML 图表包含：
 
 ```
 1. 数据读取
-   └── 从 TDX 本地数据读取指定股票日线
-   └── 自动识别最新交易日（以 sh000001 为基准）
+   └── 从 TDengine 读取指定股票日线
+   └── 自动识别最新交易日
 
 2. 数据准备
    └── 取最近 400 根 K 线作为上下文
@@ -277,16 +276,16 @@ HTML 图表包含：
 
 ### 常见问题
 
-**Q: 提示 "TDX 中未找到 xxx 的数据"**
+**Q: 提示 "TDengine 中未找到 xxx 的数据"**
 
-TDX 客户端未下载该股票数据。解决方式：
+该股票在 TDengine 中无日线数据。解决方式：
 
-1. 打开 TDX 客户端，访问该股票页面触发数据下载
-2. 确认 TDX 数据目录正确（默认 `~/.local/share/tdxcfv/drive_c/tc/`）
+1. 确认 TDengine 服务运行正常（`taos` 可连接）
+2. 检查 `tdx.k_{code}_1d` 表是否存在
 
 **Q: 提示 "数据不足: N 根 < 回看 400"**
 
-该股票在 TDX 中的历史数据不足 400 个交易日。可降低回看天数：
+该股票在 TDengine 中的历史数据不足 400 个交易日。可降低回看天数：
 
 ```bash
 python scripts/predict.py --lookback 200 600000
@@ -352,7 +351,7 @@ Kronos/
 ├── start.sh              # 一键启动脚本
 ├── scripts/
 │   ├── predict.py         # 一键预测脚本
-│   └── tdx_import.py      # TDX 数据导入工具
+│   └── tdx_import.py      # 数据导入工具（TDengine）
 ├── webui/
 │   ├── app.py             # Flask 应用
 │   ├── run.py             # Python 启动入口

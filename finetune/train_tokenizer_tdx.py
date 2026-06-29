@@ -30,11 +30,10 @@ from model.kronos import KronosTokenizer
 # Custom collate: 避免 PyTorch 2.12 多进程 storage resize bug
 # 必须定义在模块顶层，否则 multiprocessing 无法 pickle。
 def fast_collate(batch):
-    xs, stamps, covs = zip(*batch)
+    xs, stamps = zip(*batch)
     return (
         torch.stack(xs),
         torch.stack(stamps),
-        torch.stack(covs),
     )
 
 
@@ -121,7 +120,7 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
         train_loss_total = 0.0
         train_batches = 0
 
-        for batch_idx, (batch_x, _, _) in enumerate(train_loader):
+        for batch_idx, (batch_x, _) in enumerate(train_loader):
             batch_x = batch_x.to(device, non_blocking=True)
 
             # Gradient accumulation
@@ -161,7 +160,7 @@ def train(config: dict, config_obj, data_dir: str, device: torch.device):
         val_loss_total = 0.0
         val_samples = 0
         with torch.no_grad(), torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=use_amp):
-            for batch_x, _, _ in val_loader:
+            for batch_x, _ in val_loader:
                 batch_x = batch_x.to(device, non_blocking=True)
                 zs, _, _, _ = model(batch_x)
                 _, z = zs

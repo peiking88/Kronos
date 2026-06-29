@@ -532,27 +532,3 @@ This project is licensed under the [MIT License](./LICENSE).
  tdxdata/tdxdata/core/registry.py                   |   3 -
 ```
 
-### 2026-06-04 17:06:55
-```
- finetune/config_tdx.py          |  11 +++++
- finetune/dataset.py             |  33 +++++++++++--
- finetune/train_predictor_tdx.py |  45 ++++++++++++-----
- model/__init__.py               |   7 ++-
- model/covariate.py              | 325 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- model/kronos.py                 |  55 ++++++++++++++++-----
- scripts/build_czsc_cache.py     | 174 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- scripts/calibrate.py            |  17 ++++++-
- scripts/predict.py              |  20 +++++++-
- scripts/predict_stocks.py       |  81 +++++++++++++++++++++++++-----
- scripts/realtime.py             | 161 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- tests/test_covariate.py         | 323 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- tests/test_realtime.py          | 188 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 13 files changed, 1397 insertions(+), 43 deletions(-)
-```
-
-### 2026-06-26 18:19:18
-```
- model/__init__.py |  7 +------
- model/kronos.py   | 84 ++++++++++++------------------------------------------------------------------------
- 2 files changed, 13 insertions(+), 78 deletions(-)
-```
