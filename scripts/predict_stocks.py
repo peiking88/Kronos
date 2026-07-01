@@ -187,8 +187,17 @@ def derive_factor(code, df_hfq=None, verbose=True):
     return 1.0
 
 
+# sh999999 是通达信自选股中对上证综指的别名，实际数据在 sh000001
+CODE_ALIASES = {"sh999999": "sh000001"}
+
+
+def _resolve_alias(code):
+    return CODE_ALIASES.get(code, code)
+
+
 def get_data(code):
     """Return DataFrame for a stock code (6-field, 后复权)."""
+    code = _resolve_alias(code)
     if code.startswith("sh000") or code.startswith("sh999") or code.startswith("sz399"):
         if os.path.exists(SSE_DATA):
             with open(SSE_DATA, "rb") as f:
@@ -240,7 +249,45 @@ def parse_zxg_blk(path=ZXG_BLK):
 
 def classify_code(code):
     """判断是否为指数代码。"""
-    return code.startswith("sh999") or code.startswith("sz399")
+    return code.startswith("sh000") or code.startswith("sh999") or code.startswith("sz399")
+
+
+def _get_stock_names(codes):
+    """批量从 TDengine 获取股票名称。
+
+    查询 tdx.stock_name 表，按 6 位数字代码匹配。
+    支持别名解析（如 sh999999 → sh000001）。
+    对 index 代码取首条（通常为指数名），对个股尝试取末条（避免指数/债券同名覆盖）。
+    返回 {full_code: name}。
+    """
+    if not codes:
+        return {}
+    try:
+        conn = connect()
+        names = {}
+        for code in codes:
+            resolved = _resolve_alias(code)
+            code_num = resolved[2:]  # strip sh/sz/bj prefix
+            try:
+                r = conn.query(
+                    f"select name from tdx.stock_name where code = '{code_num}'"
+                )
+                rows = list(r)
+                if not rows:
+                    names[code] = code
+                elif classify_code(code):
+                    # 指数：取首条（常为指数名）
+                    names[code] = rows[0][0]
+                else:
+                    # 个股：取末条（部分代码与债券/指数同名，末条通常为个股名）
+                    names[code] = rows[-1][0]
+            except Exception:
+                names[code] = code
+        conn.close()
+        return names
+    except Exception as e:
+        print(f"  [名称获取] 连接失败: {e}", file=sys.stderr)
+        return {c: c for c in codes}
 
 
 def classify_prediction(cum_chg):
@@ -325,6 +372,59 @@ def _dir_label(cls):
     return {"bull": "看涨", "neutral": "看平", "bear": "看跌"}.get(cls, cls)
 
 
+def _check_ratio(prev, curr, prev_label, curr_label, threshold):
+    """单次比值检查，返回 (is_anomaly, detail) 或 (False, "")。"""
+    if prev <= 0 or curr <= 0:
+        return False, ""
+    ratio = curr / prev
+    if ratio > threshold or ratio < (1.0 / threshold):
+        return True, (
+            f"收盘价异常跳变 {ratio:.1f}x: "
+            f"{prev:.2f} → {curr:.2f} "
+            f"({prev_label} → {curr_label})"
+        )
+    return False, ""
+
+
+def _detect_close_anomaly(df, threshold=5.0, ref_close=None, ref_label=""):
+    """检测 DataFrame 收盘价是否存在异常跳变（脏数据）。
+
+    检查维度：
+    1. df 内部尾部 5 个交易日相邻收盘价比值
+    2. 若提供 ref_close（旧数据末笔收盘价），检查跨边界跳变
+
+    A 股涨跌停 ±10%（科创/创业 ±20%），阈值 5x 足以区分异常与正常波动。
+
+    Returns: (is_anomaly: bool, detail: str)
+    """
+    if df is None or len(df) == 0:
+        return False, ""
+
+    closes = df["close"].values
+    # 维度 1: 内部相邻比值
+    if len(closes) >= 2:
+        check_n = min(5, len(closes) - 1)
+        for i in range(len(closes) - check_n, len(closes)):
+            is_a, detail = _check_ratio(
+                closes[i - 1], closes[i],
+                df.index[i - 1].strftime('%Y-%m-%d'),
+                df.index[i].strftime('%Y-%m-%d'),
+                threshold,
+            )
+            if is_a:
+                return True, detail
+
+    # 维度 2: 跨边界比值（旧数据末笔 → 新数据首笔）
+    if ref_close is not None and ref_close > 0 and len(closes) > 0:
+        first_new = closes[0]
+        new_label = df.index[0].strftime('%Y-%m-%d') if hasattr(df.index[0], 'strftime') else str(df.index[0])
+        is_a, detail = _check_ratio(ref_close, first_new, ref_label, new_label, threshold)
+        if is_a:
+            return True, detail
+
+    return False, ""
+
+
 def ensure_fresh_data(codes):
     """检查数据新鲜度，过期则从 TDengine 导入最新数据并合并。"""
     stale_codes = []
@@ -347,6 +447,7 @@ def ensure_fresh_data(codes):
 
     from scripts.tdx_import import TdxDataImporter
     result = {}
+    anomaly_count = 0
 
     idx_codes = [c for c in stale_codes if classify_code(c)]
     stk_codes = [c for c in stale_codes if not classify_code(c)]
@@ -369,6 +470,22 @@ def ensure_fresh_data(codes):
                 print(f"  {code}: 无数据，跳过")
                 continue
             fresh_df = fresh_dataset[code]
+
+            # 检测新导入数据的收盘价异常跳变（内部 + 跨边界）
+            old_df = existing_data.get(code)
+            ref_close = float(old_df["close"].iloc[-1]) if old_df is not None and len(old_df) > 0 else None
+            ref_label = old_df.index[-1].strftime('%Y-%m-%d') if ref_close is not None else ""
+            is_anomaly, anomaly_detail = _detect_close_anomaly(
+                fresh_df, ref_close=ref_close, ref_label=ref_label,
+            )
+            if is_anomaly:
+                anomaly_count += 1
+                print(f"  {code}: ⚠ 数据异常({anomaly_detail})，丢弃新数据")
+                if code in existing_data:
+                    result[code] = existing_data[code]
+                    print(f"  {code}: 保留现有数据至 {existing_data[code].index.max().strftime('%Y-%m-%d')}")
+                continue
+
             if code in existing_data:
                 merged = pd.concat([existing_data[code], fresh_df])
                 merged = merged[~merged.index.duplicated(keep="last")].sort_index()
@@ -376,6 +493,9 @@ def ensure_fresh_data(codes):
             else:
                 result[code] = fresh_df
             print(f"  {code}: 数据已更新至 {result[code].index.max().strftime('%Y-%m-%d')}")
+
+    if anomaly_count:
+        print(f"  ⚠ 共 {anomaly_count} 只标的新数据异常，已丢弃并保留现有数据")
 
     return result
 
@@ -845,6 +965,9 @@ def main():
 
     last_preds = load_last_predictions()
 
+    print("获取股票名称...")
+    stock_names = _get_stock_names(codes)
+
     print(f"开始预测 (股票数={len(codes)})...")
     for code in codes:
         try:
@@ -859,14 +982,14 @@ def main():
             continue
 
         fwd = result["forward"]
-        all_forward[code] = {"name": code, "rows": fwd["rows"], "base": fwd["base"],
+        all_forward[code] = {"name": stock_names.get(code, code), "rows": fwd["rows"], "base": fwd["base"],
                              "factor": fwd["factor"], "bias_correction": fwd["bias_correction"],
                              "consensus_count": fwd.get("consensus_count"),
                              "consensus_directions": fwd.get("consensus_directions")}
         bt = result["backtest"]
-        all_bt[code] = {"name": code, "metrics": bt["metrics"], "windows": bt["windows"]}
+        all_bt[code] = {"name": stock_names.get(code, code), "metrics": bt["metrics"], "windows": bt["windows"]}
         conf = result["confidence"]
-        all_conf[code] = {"name": code, "conf": conf["conf"], "base": conf["base"]}
+        all_conf[code] = {"name": stock_names.get(code, code), "conf": conf["conf"], "base": conf["base"]}
         if not result.get("factor_ok", True):
             errors.append(f"{code}: 复权因子获取失败，输出为后复权价格")
 
