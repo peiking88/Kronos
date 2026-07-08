@@ -27,7 +27,7 @@ def derive_factor(code, df_hfq):
     conn = connect()
     try:
         r = conn.query(
-            f"select ts, close from tdx.k_{code[2:]}_1d order by ts desc limit 1"
+            f"select ts, close from tdx.k_{code}_1d order by ts desc limit 1"
         )
         raw_close = float(list(r)[0][1])
     finally:

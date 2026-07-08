@@ -43,6 +43,7 @@
 | TDengine `tdx.a_{code}`                     | TDengine 表  | 分红/送转股/配股事件 | `tdx_import.py:_query_adjust_events` |
 
 > 数据源为 TDengine，通过 `taosws` WebSocket 连接。后复权由 adjust 表事件实时计算，无需外部 API。
+> `{code}` 为**带市场前缀的 symbol**（`sh600000`/`sz000001`/`bj430047`），子表名形如 `k_sh600000_1d`、`a_sz000001`（v0.13.7+）。
 
 ---
 

@@ -42,13 +42,13 @@ BACKTEST_CTX = 400
 
 
 # ── TDengine 数据工具 ─────────────────────────────────
-def _query_adjust_events(conn, code: str) -> list[dict]:
-    """查询分红事件。"""
+def _query_adjust_events(conn, symbol: str) -> list[dict]:
+    """查询分红事件。symbol 形如 'sh600000'。"""
     events = []
     try:
         r = conn.query(
             f"select ts, fenhong, peigujia, songzhuangu, peigu "
-            f"from tdx.a_{code} order by ts"
+            f"from tdx.a_{symbol} order by ts"
         )
         for row in r:
             ts, fh, pj, sz, pg = row
@@ -120,7 +120,7 @@ def _get_latest_trading_date() -> str | None:
     conn = connect()
     try:
         r = conn.query(
-            "select last_row(ts) from tdx.k_000001_1d"
+            "select last_row(ts) from tdx.k_sh000001_1d"
         )
         rows = list(r)
         if rows:
@@ -153,12 +153,11 @@ def import_from_tdx(tdx_key: str, end_date: str):
     后复权因子由 adjust 表事件实时计算。factor 恒为 1.0（后复权数据末
     日即实际市场价），保留以兼容下游代码。
     """
-    code = tdx_key[2:]
     conn = connect()
     try:
         r = conn.query(
             f"select ts, open, high, low, close, volume, amount "
-            f"from tdx.k_{code}_1d order by ts"
+            f"from tdx.k_{tdx_key}_1d order by ts"
         )
         rows = list(r)
         if len(rows) < 100:
@@ -173,7 +172,7 @@ def import_from_tdx(tdx_key: str, end_date: str):
         df = df.astype({c: np.float64 for c in ['open', 'high', 'low', 'close', 'vol', 'amt']})
 
         # 后复权
-        events = _query_adjust_events(conn, code)
+        events = _query_adjust_events(conn, tdx_key)
         factor_arr = _compute_back_adjust_factor(df, events)
         df = _apply_adjustment(df, factor_arr)
 

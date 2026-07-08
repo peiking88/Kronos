@@ -26,7 +26,9 @@
 
 - 方式：`taos-ws-py` (WebSocket)，非 `taospy`（原生库有 `execstack` 兼容性问题）
 - 连接：`from taosws import connect; c = connect()`
-- 查询需带库名前缀：`tdx.k_000001_1d` / `tdx.a_000001`
+- 子表名含市场前缀（tdx-cpp v0.13.7+）：`tdx.k_{sh|sz|bj}{code}_1d` / `tdx.a_{sh|sz|bj}{code}`，如 `tdx.k_sh000001_1d`（上证指数）、`tdx.a_sz000001`（平安银行）。Kronos 内部统一用带前缀 symbol（`sh000001`）拼表名，不再剥离前缀
+- `stock_name` 表含 `market` 列，同 code 跨市场重复（`000001`：sh=上证指数 / sz=平安银行），按 code 查询须带 `and market='sh|sz|bj'`
+- 成交量单位为「股」（tdx-cpp v0.13.6+）
 
 ## 已知陷阱
 

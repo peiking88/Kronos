@@ -160,7 +160,7 @@ def derive_factor(code, df_hfq=None, verbose=True):
             conn = connect()
             try:
                 r = conn.query(
-                    f"select ts, close from tdx.k_{code[2:]}_1d order by ts"
+                    f"select ts, close from tdx.k_{code}_1d order by ts"
                 )
                 rows = list(r)
                 if rows:
@@ -268,19 +268,16 @@ def _get_stock_names(codes):
         for code in codes:
             resolved = _resolve_alias(code)
             code_num = resolved[2:]  # strip sh/sz/bj prefix
+            market = resolved[:2]
             try:
+                # stock_name 同 code 跨市场重复（sh000001=上证指数/sz000001=平安银行），
+                # 按 market 精确过滤（v0.13.7+）。
                 r = conn.query(
-                    f"select name from tdx.stock_name where code = '{code_num}'"
+                    f"select name from tdx.stock_name "
+                    f"where code = '{code_num}' and market = '{market}'"
                 )
                 rows = list(r)
-                if not rows:
-                    names[code] = code
-                elif classify_code(code):
-                    # 指数：取首条（常为指数名）
-                    names[code] = rows[0][0]
-                else:
-                    # 个股：取末条（部分代码与债券/指数同名，末条通常为个股名）
-                    names[code] = rows[-1][0]
+                names[code] = rows[0][0] if rows else code
             except Exception:
                 names[code] = code
         conn.close()

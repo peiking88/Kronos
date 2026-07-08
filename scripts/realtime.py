@@ -75,11 +75,10 @@ def append_realtime_bars(codes, data_map, factor_map):
     conn = connect()
     try:
         for orig_code in valid_codes:
-            code = _strip_prefix(orig_code)
             try:
                 r = conn.query(
                     f"select ts, open, high, low, close, volume, amount "
-                    f"from tdx.k_{code}_1d "
+                    f"from tdx.k_{orig_code}_1d "
                     f"where ts >= '{today_str}' order by ts desc limit 1"
                 )
                 rows = list(r)

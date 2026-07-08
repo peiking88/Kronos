@@ -566,3 +566,21 @@ This project is licensed under the [MIT License](./LICENSE).
 - `scripts/tdx_export_from_tdengine.py` — `get_all_stocks()` 新增 sh(`5`), sz(`18`,`39`) 前缀
 - 修复 sh520620, sh589960, sz159731 等 ETF/基金/指数无法导出问题
 - 全部 5286 只 TDengine 代码覆盖验证通过
+
+### 2026-07-01 15:16:15
+```
+ scripts/predict_stocks.py | 131 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 127 insertions(+), 4 deletions(-)
+```
+
+### 2026-07-08
+
+修复: 适配 tdx-cpp TDengine 子表市场前缀化（v0.13.6/7/8）
+
+- 子表名改用带市场前缀 symbol 拼装：`k_{sh|sz|bj}{code}_1d` / `a_{sh|sz|bj}{code}`（旧 `k_000001_1d` / `a_000001` 已废弃）
+- `tdx_export_from_tdengine.py` / `tdx_import.py` / `predict.py` / `realtime.py` / `predict_stocks.py` 全部停止剥离前缀
+- `stock_name` 查询加 `market` 过滤，sh000001(上证指数)/sz000001(平安银行) 精确区分
+- 顺带修复：上证指数（sh000001）此前因 code 前缀推断丢失，现两市 000001 分别导出
+- 删除因此变死的 `_resolve_market`/`_code_to_symbol`/`_symbol_to_code`
+- 验证：pytest 41 passed + 连真实库冒烟（15953 symbols，两市 000001 精确区分）
+

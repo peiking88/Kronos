@@ -238,35 +238,8 @@ def _apply_adjustment(df: pd.DataFrame, factor: np.ndarray) -> pd.DataFrame:
 # TDengine data access
 # ---------------------------------------------------------------------------
 
-def _resolve_market(code: str) -> str:
-    """Map raw numeric code to market prefix.
-
-    Returns 'sh', 'sz', or 'bj'.
-    """
-    if code.startswith(('60', '68')):
-        return 'sh'
-    elif code.startswith(('00', '30', '12', '16', '15')):
-        return 'sz'
-    elif code.startswith(('8', '4', '9')):
-        return 'bj'
-    return 'sz'  # fallback
-
-
-def _code_to_symbol(code: str) -> str:
-    """Convert raw numeric code to prefixed symbol (e.g. '000001' -> 'sz000001')."""
-    market = _resolve_market(code)
-    return f"{market}{code}"
-
-
-def _symbol_to_code(symbol: str) -> str:
-    """Convert prefixed symbol to raw numeric code (e.g. 'sz000001' -> '000001')."""
-    if symbol.startswith(('sh', 'sz', 'bj')):
-        return symbol[2:]
-    return symbol
-
-
-def _query_adjust_events(conn, code: str) -> list[dict]:
-    """Query dividend events from TDengine adjust table.
+def _query_adjust_events(conn, symbol: str) -> list[dict]:
+    """Query dividend events from TDengine adjust table. symbol 形如 'sz000001'。
 
     Returns list of event dicts sorted by date ascending.
     """
@@ -274,7 +247,7 @@ def _query_adjust_events(conn, code: str) -> list[dict]:
     try:
         r = conn.query(
             f"select ts, fenhong, peigujia, songzhuangu, peigu "
-            f"from tdx.a_{code} order by ts"
+            f"from tdx.a_{symbol} order by ts"
         )
         for row in r:
             ts, fh, pj, sz, pg = row
@@ -292,8 +265,8 @@ def _query_adjust_events(conn, code: str) -> list[dict]:
     return events
 
 
-def _query_daily_kline(conn, code: str) -> pd.DataFrame | None:
-    """Query daily OHLCV from TDengine for a single stock.
+def _query_daily_kline(conn, symbol: str) -> pd.DataFrame | None:
+    """Query daily OHLCV from TDengine for a single stock. symbol 形如 'sz000001'。
 
     Returns DataFrame indexed by datetime with columns: open, high, low,
     close, vol, amt (float64). Returns None if insufficient data.
@@ -301,7 +274,7 @@ def _query_daily_kline(conn, code: str) -> pd.DataFrame | None:
     try:
         r = conn.query(
             f"select ts, open, high, low, close, volume, amount "
-            f"from tdx.k_{code}_1d order by ts"
+            f"from tdx.k_{symbol}_1d order by ts"
         )
     except Exception:
         return None
@@ -330,9 +303,11 @@ def _discover_stocks_tdengine() -> list[str]:
         r = conn.query("select distinct tbname from tdx.kline where cycle='1d'")
         symbols = []
         for row in r:
-            tbname = row[0]  # k_000001_1d
-            code = tbname.split('_')[1]
-            symbols.append(_code_to_symbol(code))
+            tbname = row[0]  # k_sh000001_1d
+            parts = tbname.split('_')
+            # parts[1] = 'sh000001'：2 位市场前缀 + 6 位代码（v0.13.7+）
+            if len(parts) >= 3 and len(parts[1]) == 8 and parts[1][:2] in ('sh', 'sz', 'bj'):
+                symbols.append(parts[1])
         return sorted(symbols)
     finally:
         conn.close()
@@ -350,13 +325,12 @@ def _fetch_stock_daily(conn, symbol: str, dividend_type: str) -> pd.DataFrame | 
         DataFrame with columns [date, stock_code, open, high, low, close,
         vol, amt] or None.
     """
-    code = _symbol_to_code(symbol)
-    df = _query_daily_kline(conn, code)
+    df = _query_daily_kline(conn, symbol)
     if df is None:
         return None
 
     if dividend_type == "back":
-        events = _query_adjust_events(conn, code)
+        events = _query_adjust_events(conn, symbol)
         factor = _compute_back_adjust_factor(df, events)
         df = _apply_adjustment(df, factor)
 

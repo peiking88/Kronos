@@ -21,26 +21,25 @@ from tqdm import tqdm
 from taosws import connect
 
 
-def get_all_stocks(conn) -> dict[str, str]:
-    """获取所有日线股票: {raw_code: full_symbol}。"""
+def get_all_stocks(conn) -> list[str]:
+    """获取所有日线股票 symbol（含市场前缀 sh/sz/bj）。
+
+    子表名 k_{sh|sz|bj}{code}_{cycle}（v0.13.7+），市场前缀直接从 tbname 解析，
+    不再从 code 前缀推断（避免 sh000001 上证指数 / sz000001 平安银行歧义）。
+    """
     r = conn.query("select distinct tbname from tdx.kline where cycle='1d'")
-    code_map = {}
+    symbols = []
     for row in r:
-        tbname = row[0]  # k_000001_1d
-        code = tbname.split('_')[1]
-        if code.startswith(('60', '68', '5')):  # 上交所主板/科创/ETF(5xxx)
-            code_map[code] = f'sh{code}'
-        elif code.startswith(('00', '30', '12', '16', '15', '18', '39')):  # 深交所主板/创业/ETF/LOF/封基/指数(39)
-            code_map[code] = f'sz{code}'
-        elif code.startswith(('8', '4', '9')):  # 北交所
-            code_map[code] = f'bj{code}'
-        else:
-            code_map[code] = code
-    return code_map
+        tbname = row[0]  # k_sh000001_1d
+        parts = tbname.split('_')
+        # parts[1] = 'sh000001'：2 位市场前缀 + 6 位代码
+        if len(parts) >= 3 and len(parts[1]) == 8 and parts[1][:2] in ('sh', 'sz', 'bj'):
+            symbols.append(parts[1])
+    return symbols
 
 
-def query_stock_with_adjust(conn, code: str) -> tuple[pd.DataFrame | None, list[dict] | None]:
-    """查询单只股票的日线 + 分红事件。
+def query_stock_with_adjust(conn, symbol: str) -> tuple[pd.DataFrame | None, list[dict] | None]:
+    """查询单只股票的日线 + 分红事件。symbol 形如 'sh000001'。
 
     Returns:
         (df, events): df indexed by datetime, events sorted by date ascending
@@ -49,7 +48,7 @@ def query_stock_with_adjust(conn, code: str) -> tuple[pd.DataFrame | None, list[
     try:
         r = conn.query(
             f"select ts, open, high, low, close, volume, amount "
-            f"from tdx.k_{code}_1d order by ts"
+            f"from tdx.k_{symbol}_1d order by ts"
         )
     except Exception:
         return None, None
@@ -69,7 +68,7 @@ def query_stock_with_adjust(conn, code: str) -> tuple[pd.DataFrame | None, list[
     try:
         r2 = conn.query(
             f"select ts, fenhong, peigujia, songzhuangu, peigu "
-            f"from tdx.a_{code} order by ts"
+            f"from tdx.a_{symbol} order by ts"
         )
         for row in r2:
             ts, fh, pj, sz, pg = row
@@ -170,20 +169,20 @@ def split_by_date(df: pd.DataFrame, train_end: str, val_end: str):
 
 def process_stock(args: tuple) -> tuple[str, pd.DataFrame | None, pd.DataFrame | None, pd.DataFrame | None, str | None]:
     """处理单只股票（供线程池调用）。每线程独立连接。"""
-    code, full_symbol, train_end, val_end = args
+    symbol, train_end, val_end = args
     conn = connect()
     try:
-        df, events = query_stock_with_adjust(conn, code)
+        df, events = query_stock_with_adjust(conn, symbol)
         if df is None:
-            return full_symbol, None, None, None, "no data or <100 bars"
+            return symbol, None, None, None, "no data or <100 bars"
 
         factor = compute_back_adjust_factor(df, events)
         df_adj = apply_adjustment(df, factor)
         train_df, val_df, test_df = split_by_date(df_adj, train_end, val_end)
 
-        return full_symbol, train_df, val_df, test_df, None
+        return symbol, train_df, val_df, test_df, None
     except Exception as e:
-        return full_symbol, None, None, None, str(e)
+        return symbol, None, None, None, str(e)
     finally:
         conn.close()
 
@@ -195,8 +194,8 @@ def export_tdengine(output_dir: str, workers: int = 4):
     conn = connect()
 
     print("获取股票列表...")
-    code_map = get_all_stocks(conn)
-    print(f"共 {len(code_map)} 只日线股票")
+    symbols = get_all_stocks(conn)
+    print(f"共 {len(symbols)} 只日线股票")
 
     train_end = '2025-12-25'
     val_end = '2026-03-25'
@@ -206,7 +205,7 @@ def export_tdengine(output_dir: str, workers: int = 4):
 
     print(f"导出 + 后复权计算 ({workers} 线程)...")
 
-    tasks = [(c, code_map[c], train_end, val_end) for c in code_map]
+    tasks = [(s, train_end, val_end) for s in symbols]
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(process_stock, t) for t in tasks]
