@@ -195,23 +195,57 @@ def _resolve_alias(code):
     return CODE_ALIASES.get(code, code)
 
 
+def _fetch_index_from_tdengine(code: str) -> "pd.DataFrame | None":
+    """从 TDengine 拉取指数 1d K 线，返回 6 字段 DataFrame (open, high, low, close, vol, amt)。
+
+    code 为带前缀原始代码（如 sh999999、sh000688、sz399006），表名 k_{code}_1d。
+    """
+    try:
+        conn = connect()
+        try:
+            r = conn.query(
+                f"select ts, open, high, low, close, volume, amount "
+                f"from tdx.k_{code}_1d order by ts"
+            )
+            rows = list(r)
+            if len(rows) < 50:
+                return None
+            df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "vol", "amt"])
+            df["ts"] = pd.to_datetime(df["ts"]).dt.tz_localize(None)
+            df = df.set_index("ts").sort_index()
+            df = df.astype({c: np.float64 for c in ["open", "high", "low", "close", "vol", "amt"]})
+            return df
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
 def get_data(code):
-    """Return DataFrame for a stock code (6-field, 后复权)."""
-    code = _resolve_alias(code)
-    if code.startswith("sh000") or code.startswith("sh999") or code.startswith("sz399"):
+    """Return DataFrame for a stock code (6-field, 后复权)。
+
+    指数（sh000/sh999/sz399）直接从 TDengine 拉取最新数据；
+    个股仍从本地 pickle 读取（同旧行为）。
+    """
+    resolved = _resolve_alias(code)
+    if resolved.startswith("sh000") or resolved.startswith("sh999") or resolved.startswith("sz399"):
+        df = _fetch_index_from_tdengine(code)
+        if df is not None and len(df) > 0:
+            return df
+        # 兜底：本地 pickle（兼容旧工作流）
         if os.path.exists(SSE_DATA):
             with open(SSE_DATA, "rb") as f:
                 d = pickle.load(f)
-            if code in d:
-                return d[code].copy()
+            if resolved in d:
+                return d[resolved].copy()
 
     for fname in ["test_data.pkl", "val_data.pkl", "train_data.pkl", "data.pkl"]:
         fpath = os.path.join(DATA_DIR, fname)
         if os.path.exists(fpath):
             with open(fpath, "rb") as f:
                 d = pickle.load(f)
-            if code in d:
-                return d[code].copy()
+            if resolved in d:
+                return d[resolved].copy()
     return None
 
 
@@ -317,9 +351,13 @@ def process_single(code, predictor, fresh_cache, factor=None):
     from collections import Counter
 
     print(f"  处理 {code}...", flush=True)
-    df = fresh_cache[code] if code in fresh_cache else get_data(code)
-    if df is None:
-        return {"code": code, "error": "数据未找到"}
+    # 仅使用 fresh_cache 中的数据；missing_codes 已在 main() 中剔除并记入 errors，
+    # 此处不再回退到本地 pickle。
+    if code not in fresh_cache:
+        return {"code": code, "error": "数据未在 fresh_cache 中（TDengine 无 1d 数据或导入异常，已跳过）"}
+    df = fresh_cache[code]
+    if df is None or len(df) == 0:
+        return {"code": code, "error": "数据为空"}
 
     is_index = classify_code(code)
     if factor is None:
@@ -383,12 +421,15 @@ def _check_ratio(prev, curr, prev_label, curr_label, threshold):
     return False, ""
 
 
-def _detect_close_anomaly(df, threshold=5.0, ref_close=None, ref_label=""):
+def _detect_close_anomaly(df, threshold=5.0, ref_close=None, ref_label="", ref_date=None):
     """检测 DataFrame 收盘价是否存在异常跳变（脏数据）。
 
     检查维度：
     1. df 内部尾部 5 个交易日相邻收盘价比值
-    2. 若提供 ref_close（旧数据末笔收盘价），检查跨边界跳变
+    2. 若提供 ref_close（旧数据末笔收盘价），检查跨边界跳变：
+       比较 ref_close 与 df 中首条严格晚于 ref_date 的 bar。
+       TDengine 回填场景下 df 为全历史（可能起始于 1990 年代），
+       此时首条 bar 并非"新增"，不能与旧末笔比较。
 
     A 股涨跌停 ±10%（科创/创业 ±20%），阈值 5x 足以区分异常与正常波动。
 
@@ -411,19 +452,33 @@ def _detect_close_anomaly(df, threshold=5.0, ref_close=None, ref_label=""):
             if is_a:
                 return True, detail
 
-    # 维度 2: 跨边界比值（旧数据末笔 → 新数据首笔）
-    if ref_close is not None and ref_close > 0 and len(closes) > 0:
-        first_new = closes[0]
-        new_label = df.index[0].strftime('%Y-%m-%d') if hasattr(df.index[0], 'strftime') else str(df.index[0])
-        is_a, detail = _check_ratio(ref_close, first_new, ref_label, new_label, threshold)
-        if is_a:
-            return True, detail
+    # 维度 2: 跨边界比值（旧数据末笔 → 新增数据首笔）
+    # 仅当存在严格晚于 ref_date 的新 bar 时才比较；否则说明导入数据
+    # 完全落在旧数据时间范围内，不存在需要校验的"边界"。
+    if ref_close is not None and ref_close > 0 and ref_date is not None:
+        new_mask = df.index > ref_date  # ndarray of bool
+        if new_mask.any():
+            first_idx = int(np.argmax(new_mask))
+            first_new = closes[first_idx]
+            new_label = df.index[first_idx].strftime('%Y-%m-%d') if hasattr(df.index[first_idx], 'strftime') else str(df.index[first_idx])
+            is_a, detail = _check_ratio(ref_close, first_new, ref_label, new_label, threshold)
+            if is_a:
+                return True, detail
 
     return False, ""
 
 
 def ensure_fresh_data(codes):
-    """检查数据新鲜度，过期则从 TDengine 导入最新数据并合并。"""
+    """检查数据新鲜度，过期则从 TDengine 导入最新数据并合并。
+
+    返回 (fresh_cache, missing_codes)：
+        fresh_cache: {code: DataFrame} — 可供预测的数据（含未过期标的，直接使用本地数据）
+        missing_codes: set — 过期但 TDengine 中无 1d 数据（或导入失败）的标的，
+                               调用方不应再回退到本地 pickle
+
+    未过期（today - latest <= MAX_STALE_DAYS）的标的直接用本地数据填充 fresh_cache，
+    避免在 main() 中再次回退到 pickle 读路径。
+    """
     stale_codes = []
     existing_data = {}
     for code in codes:
@@ -436,14 +491,22 @@ def ensure_fresh_data(codes):
             stale_codes.append(code)
             existing_data[code] = df
 
+    # 未过期标的直接用本地数据（这些是最新且可直接用的）
+    fresh_cache = {}
+    for code in codes:
+        if code not in stale_codes:
+            df = existing_data.get(code) or get_data(code)
+            if df is not None and len(df) > 0:
+                fresh_cache[code] = df
+
     if not stale_codes:
         print("数据均为最新，无需导入。")
-        return {}
+        return fresh_cache, set()
 
     print(f"以下 {len(stale_codes)} 只股票数据需要更新: {stale_codes}")
 
     from scripts.tdx_import import TdxDataImporter
-    result = {}
+    missing_codes = set()
     anomaly_count = 0
 
     idx_codes = [c for c in stale_codes if classify_code(c)]
@@ -459,12 +522,18 @@ def ensure_fresh_data(codes):
                 group, period="1d", check_continuity=False,
             )
         except Exception as e:
-            print(f"导入失败: {e}，将使用现有数据。")
+            # TDengine 缺表或连接失败：整组标记为缺失，禁止回退本地 pickle
+            print(f"⚠ 导入失败: {e}，{len(group)} 只标的将标记为缺失: {group}",
+                  file=sys.stderr)
+            missing_codes.update(group)
             continue
 
         for code in group:
             if code not in fresh_dataset:
-                print(f"  {code}: 无数据，跳过")
+                # TDengine 中无 1d 数据（表不存在）：标记缺失，不保留旧数据
+                print(f"  ⚠ {code}: TDengine 中无 1d 数据（表不存在），标记为缺失",
+                      file=sys.stderr)
+                missing_codes.add(code)
                 continue
             fresh_df = fresh_dataset[code]
 
@@ -472,29 +541,33 @@ def ensure_fresh_data(codes):
             old_df = existing_data.get(code)
             ref_close = float(old_df["close"].iloc[-1]) if old_df is not None and len(old_df) > 0 else None
             ref_label = old_df.index[-1].strftime('%Y-%m-%d') if ref_close is not None else ""
+            ref_date = old_df.index[-1] if old_df is not None and len(old_df) > 0 else None
             is_anomaly, anomaly_detail = _detect_close_anomaly(
-                fresh_df, ref_close=ref_close, ref_label=ref_label,
+                fresh_df, ref_close=ref_close, ref_label=ref_label, ref_date=ref_date,
             )
             if is_anomaly:
                 anomaly_count += 1
-                print(f"  {code}: ⚠ 数据异常({anomaly_detail})，丢弃新数据")
-                if code in existing_data:
-                    result[code] = existing_data[code]
-                    print(f"  {code}: 保留现有数据至 {existing_data[code].index.max().strftime('%Y-%m-%d')}")
+                # 新数据异常：丢弃新数据并标记缺失（不再回退旧数据，避免用脏数据预测）
+                print(f"  ⚠ {code}: 数据异常({anomaly_detail})，丢弃新数据并标记为缺失",
+                      file=sys.stderr)
+                missing_codes.add(code)
                 continue
 
             if code in existing_data:
                 merged = pd.concat([existing_data[code], fresh_df])
                 merged = merged[~merged.index.duplicated(keep="last")].sort_index()
-                result[code] = merged
+                fresh_cache[code] = merged
             else:
-                result[code] = fresh_df
-            print(f"  {code}: 数据已更新至 {result[code].index.max().strftime('%Y-%m-%d')}")
+                fresh_cache[code] = fresh_df
+            print(f"  {code}: 数据已更新至 {fresh_cache[code].index.max().strftime('%Y-%m-%d')}")
 
     if anomaly_count:
-        print(f"  ⚠ 共 {anomaly_count} 只标的新数据异常，已丢弃并保留现有数据")
+        print(f"  ⚠ 共 {anomaly_count} 只标的新数据异常，已丢弃并标记为缺失", file=sys.stderr)
+    if missing_codes:
+        print(f"  ⚠ 共 {len(missing_codes)} 只标的不可用（无 1d 数据或导入异常）: {sorted(missing_codes)}",
+              file=sys.stderr)
 
-    return result
+    return fresh_cache, missing_codes
 
 
 def apply_price_limits(rows, last_close_actual, limit_rate=LIMIT_RATE):
@@ -926,7 +999,32 @@ def main():
     device = torch.device(args.device)
     print(f"Device: {device}")
 
-    fresh_cache = {} if args.no_import else ensure_fresh_data(codes)
+    errors = []  # 贯穿 main 收集各类错误/告警，末尾统一输出
+
+    # --no-import: 用户显式要求使用现有本地数据，不做新鲜度检查/DB 导入。
+    # 此时仍从本地 pickle 读取（原有行为），缺失标的记入 errors。
+    if args.no_import:
+        missing_codes = set()
+        fresh_cache = {}
+        for code in codes:
+            d = get_data(code)
+            if d is not None and len(d) > 0:
+                fresh_cache[code] = d
+            else:
+                missing_codes.add(code)
+                print(f"  ⚠ {code}: 本地无数据，跳过")
+    else:
+        fresh_cache, missing_codes = ensure_fresh_data(codes)
+
+    # 剔除无 1d 数据（或导入失败）的标的，禁止回退到本地 pickle；同时写入 errors
+    if missing_codes:
+        for code in sorted(missing_codes):
+            errors.append(f"{code}: TDengine 无 1d 数据或导入失败，已禁用本地 pickle 回退，跳过")
+        print(f"⚠ 剔除 {len(missing_codes)} 只不可用标的: {sorted(missing_codes)}")
+        codes = [c for c in codes if c not in missing_codes]
+        if not codes:
+            print("所有标的均不可用，退出。", file=sys.stderr)
+            sys.exit(1)
 
     print("获取复权因子...")
     factors = prefetch_factors(codes, fresh_cache)
@@ -936,20 +1034,21 @@ def main():
         print(f"  ⚠ {len(fail_codes)} 只股票复权因子获取失败（将输出后复权价格）: {fail_codes}")
     print(f"  因子获取完成: {ok_count}/{len(codes)} 有效")
 
+    # 仅使用 fresh_cache 中的数据。missing_codes 已在此前剔除并记入 errors，
+    # 不再回退到本地 pickle（避免用陈旧数据填充预测）。
+    all_data = {code: fresh_cache[code] for code in codes
+                if code in fresh_cache and fresh_cache[code] is not None}
+    if len(all_data) < len(codes):
+        skipped = [c for c in codes if c not in all_data]
+        # 防御性兜底：fresh_cache 缺失应已被 missing_codes 捕获，此处仅作保险
+        for code in skipped:
+            errors.append(f"{code}: fresh_cache 中无数据（未预期路径），跳过")
+
     from scripts.realtime import append_realtime_bars
-    all_data = {}
-    for code in codes:
-        if code in fresh_cache and fresh_cache[code] is not None:
-            all_data[code] = fresh_cache[code]
-        else:
-            d = get_data(code)
-            if d is not None:
-                all_data[code] = d
     factor_map = {code: f for code, (f, _) in factors.items()}
-    append_realtime_bars(codes, all_data, factor_map)
-    for code in codes:
-        if code in all_data and all_data[code] is not None:
-            fresh_cache[code] = all_data[code]
+    append_realtime_bars(list(all_data.keys()), all_data, factor_map)
+    for code in all_data:
+        fresh_cache[code] = all_data[code]
 
     print(f"加载微调模型...")
     predictor = load_model(device)
@@ -958,7 +1057,6 @@ def main():
     all_bt = {}
     all_conf = {}
     all_stability = {}
-    errors = []
 
     last_preds = load_last_predictions()
 
