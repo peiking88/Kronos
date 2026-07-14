@@ -324,7 +324,7 @@ python finetune/train_predictor_tdx.py \
   --epochs 30
 
 # Step 4: Verify with SSE Index prediction
-python scripts/predict_sse.py
+python .claude/skills/finetune-kronos/scripts/predict_sse.py
 ```
 
 ### What's Included
@@ -335,7 +335,7 @@ python scripts/predict_sse.py
 | `finetune/config_tdx.py`          | Single-GPU config (后复权, RTX 4060 8GB tuned)                              |
 | `finetune/train_tokenizer_tdx.py` | Tokenizer single-GPU training script                                        |
 | `finetune/train_predictor_tdx.py` | Predictor single-GPU training script (AMP fp16)                             |
-| `scripts/predict_sse.py`          | Prediction demo on SSE Composite Index                                      |
+| `.claude/skills/finetune-kronos/scripts/predict_sse.py` | Prediction demo on SSE Composite Index (reads sh999999 from TDengine) |
 | `summary.md`                      | Full workflow summary and results                                           |
 
 ### Hardware Requirements

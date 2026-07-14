@@ -9,10 +9,10 @@ sh000001 daily data, and generates future price forecasts.
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pickle
 import numpy as np
 import pandas as pd
 import torch
+from taosws import connect
 
 from model.kronos import KronosTokenizer, Kronos, KronosPredictor
 
@@ -38,14 +38,26 @@ def main():
     predictor = KronosPredictor(model, tokenizer, device=device, max_context=512)
 
     # ------------------------------------------------------------------
-    # 2. Load sh000001 data
+    # 2. Load sh999999 上证指数 data from TDengine
+    #    TDengine 表名为 k_sh999999_1d（通达信别名 sh999999，无 sh000001 表）
     # ------------------------------------------------------------------
-    with open("./data/tdx_import_sse/1d/data.pkl", "rb") as f:
-        data = pickle.load(f)
+    print("\n从 TDengine 拉取上证指数 sh999999 日线...")
+    conn = connect()
+    try:
+        r = conn.query(
+            "select ts, open, high, low, close, volume, amount "
+            "from tdx.k_sh999999_1d order by ts"
+        )
+        rows = list(r)
+    finally:
+        conn.close()
 
-    df = data["sh000001"]
-    print(f"\nsh000001 data: {len(df)} rows, {df.index[0]} ~ {df.index[-1]}")
-    print(f"Columns: {list(df.columns)}")
+    df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "vol", "amt"])
+    df["ts"] = pd.to_datetime(df["ts"]).dt.tz_localize(None)
+    df = df.set_index("ts").sort_index()
+    df = df.astype({c: np.float64 for c in ["open", "high", "low", "close", "vol", "amt"]})
+    print(f"  sh999999 data: {len(df)} rows, {df.index[0].date()} ~ {df.index[-1].date()}")
+    print(f"  Columns: {list(df.columns)}")
 
     # Ensure correct column names for predictor
     df = df.rename(columns={"vol": "volume", "amt": "amount"})
