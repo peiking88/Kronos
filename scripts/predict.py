@@ -27,6 +27,7 @@ from taosws import connect
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from model import Kronos, KronosTokenizer, KronosPredictor
 from scripts.calibrate import backtest_calibrate
+from scripts.tdx_import import _detect_unadjusted_splits
 
 # ── 常量 ──────────────────────────────────────────────
 TOKENIZER_ID = "NeoQuasar/Kronos-Tokenizer-base"
@@ -174,6 +175,7 @@ def import_from_tdx(tdx_key: str, end_date: str):
         # 后复权
         events = _query_adjust_events(conn, tdx_key)
         factor_arr = _compute_back_adjust_factor(df, events)
+        factor_arr = _detect_unadjusted_splits(df, factor_arr)
         df = _apply_adjustment(df, factor_arr)
 
         # 日期过滤

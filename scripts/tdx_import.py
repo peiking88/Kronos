@@ -234,6 +234,32 @@ def _apply_adjustment(df: pd.DataFrame, factor: np.ndarray) -> pd.DataFrame:
     return df_adj
 
 
+def _detect_unadjusted_splits(df: pd.DataFrame, factor: np.ndarray) -> np.ndarray:
+    """检测 adjust 表未覆盖的份额拆分（基金/ETF 无 tdx.a_* 表）。
+
+    基金（如 ETF）没有 adjust 表，份额拆分（如 1:3）在事件复权后的收盘序列里
+    表现为一根不可能的隔夜跳跌：ratio = close[i]/close[i-1] < 0.5。任何 A 股
+    单日涨跌幅都不会跌破 0.833（科创/创业 ±20% 下限），故 < 0.5 必为拆分。
+
+    以观测 ratio 缩放拆分前的 bar，使序列在最新（拆分后）价位连续。这会吸收
+    拆分当日市场涨跌幅进历史价位（小幅畸变），但消除了 60%+ 的虚假跳空——
+    后者对模型危害远大于前者。
+
+    ponytail: 仅扫事件复权后的 close；已被事件解释的拆分不会重复触发。
+    """
+    closes = df['close'].values
+    n = len(closes)
+    for i in range(n - 1, 0, -1):  # 新→旧，factor 累积正确
+        prev = closes[i - 1] * factor[i - 1]
+        curr = closes[i] * factor[i]
+        if prev <= 0 or curr <= 0:
+            continue
+        ratio = curr / prev
+        if ratio < 0.5:
+            factor[:i] *= ratio
+    return factor
+
+
 # ---------------------------------------------------------------------------
 # TDengine data access
 # ---------------------------------------------------------------------------
@@ -332,6 +358,7 @@ def _fetch_stock_daily(conn, symbol: str, dividend_type: str) -> pd.DataFrame | 
     if dividend_type == "back":
         events = _query_adjust_events(conn, symbol)
         factor = _compute_back_adjust_factor(df, events)
+        factor = _detect_unadjusted_splits(df, factor)
         df = _apply_adjustment(df, factor)
 
     df = df.reset_index()

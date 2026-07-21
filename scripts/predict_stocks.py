@@ -612,10 +612,14 @@ def run_prediction(predictor, df, factor):
             "high": round(max(h, l) / factor, 2),
             "low": round(min(h, l) / factor, 2),
             "close": round(c / factor, 2),
+            # cum_chg uses pre-cap price; post-cap cum_chg is recomputed below
             "cum_chg": (c - last_close) / last_close,
         })
 
     apply_price_limits(rows, last_close_actual)
+    # cum_chg must reflect post-cap closes, otherwise it contradicts the displayed close
+    for r in rows:
+        r["cum_chg"] = (r["close"] - last_close_actual) / last_close_actual
     return rows, last_close_actual
 
 
