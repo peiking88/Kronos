@@ -157,18 +157,16 @@ cat outputs/tdx_finetune/tdx_predictor/summary.json
 
 ### Step 4: 预测验证
 
-```bash
-# 导入上证指数（不复权）
-.venv/bin/python scripts/tdx_import.py \
-  --symbols sh000001 \
-  --dividend-type none \
-  --periods 1d \
-  --output-dir ./data/tdx_import_sse \
-  --no-split --no-continuity
+技能内置 `scripts/predict_sse.py`，**直接从 TDengine 拉取上证指数**（表名 `k_sh999999_1d`，通达信别名 `sh999999`），无需先运行 `tdx_import.py`：
 
-# 运行预测（predict_stocks.py 支持多股票预测 + md 报告）
-.venv/bin/python scripts/predict_stocks.py sh000001
+```bash
+# 直接从 TDengine 拉取上证指数并预测（无需先 import）
+python .claude/skills/finetune-kronos/scripts/predict_sse.py
 ```
+
+> **说明**：`k_sh000001_1d` 表在 TDengine 中不存在，上证指数数据写入在 `k_sh999999_1d`（通达信别名）。
+> 旧流程 `tdx_import.py --symbols sh000001` 会静默失败（表不存在被吞掉），`predict_stocks.py sh000001` 会回退到本地陈旧 pkl。
+> 如需多股票预测 + md 报告，仍可使用 `scripts/predict_stocks.py sh999999`（走 `get_data` → `_fetch_index_from_tdengine` 直读 TDengine）。
 
 ## 关键文件清单
 
