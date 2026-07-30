@@ -260,49 +260,6 @@ def _detect_unadjusted_splits(df: pd.DataFrame, factor: np.ndarray) -> np.ndarra
     return factor
 
 
-def _fix_amount_volume_anomalies(df: pd.DataFrame) -> pd.DataFrame:
-    """修正 amount 系统性误差和 volume 离群值。
-
-    科创 ETF（sh588170、sh588000 等）post-split amount 存在 100x 误差（单位错位），
-    导致模型 z-score 归一化后 amount 特征被压缩到 0 附近，失去对价格信号的判断能力。
-
-    检测方法：逐日计算 amt/(vol*price) 比值。比值 >10 或 <0.1 视为单位错位，
-    用 vol*price 替换该日 amount。使用绝对阈值而非相对基准，避免 pre-split 数据
-    （成交量单位不同导致比值 ≈3）被误伤。
-
-    同时检测 volume 离群值（>10x 中位数），用中位数替换。
-
-    ponytail: 仅修正系统性偏差和极端离群，保留正常波动。
-    """
-    df = df.copy()
-    if len(df) < 10:
-        return df
-
-    avg_price = df[['open', 'high', 'low', 'close']].mean(axis=1)
-
-    # 1. 修正 amount 系统性误差（绝对阈值，避免误伤 pre-split 数据）
-    expected_amt = (df['vol'] * avg_price).replace(0, np.nan)
-    ratio = df['amt'] / expected_amt
-    bad = ((ratio > 10) | (ratio < 0.1)) & ratio.notna() & (df['vol'] > 0)
-    if bad.any():
-        n_bad = bad.sum()
-        df.loc[bad, 'amt'] = (df.loc[bad, 'vol'] * avg_price[bad]).astype(np.float32)
-        print(f"  ⚠ amount 修正: {n_bad} 天单位错位 (比值>10 或 <0.1), 已用 vol*price 替换")
-
-    # 2. 修正 volume 离群值
-    vol_median = df['vol'].median()
-    if vol_median > 0:
-        vol_ratio = df['vol'] / vol_median
-        outliers = vol_ratio > 10
-        if outliers.any():
-            n_outliers = outliers.sum()
-            df.loc[outliers, 'vol'] = vol_median
-            df.loc[outliers, 'amt'] = vol_median * avg_price[outliers]
-            print(f"  ⚠ volume 离群修正: {n_outliers} 天 >10x 中位数, 已用中位数替换")
-
-    return df
-
-
 # ---------------------------------------------------------------------------
 # TDengine data access
 # ---------------------------------------------------------------------------
@@ -403,7 +360,6 @@ def _fetch_stock_daily(conn, symbol: str, dividend_type: str) -> pd.DataFrame | 
         factor = _compute_back_adjust_factor(df, events)
         factor = _detect_unadjusted_splits(df, factor)
         df = _apply_adjustment(df, factor)
-        df = _fix_amount_volume_anomalies(df)
 
     df = df.reset_index()
     df = df.rename(columns={'ts': 'date', 'index': 'date'})
