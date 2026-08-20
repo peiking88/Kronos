@@ -184,7 +184,7 @@ python scripts/predict.py 600000 002741 600519
 | `--samples`            | 2                                   | 采样次数，多次采样取平均可提升稳定性                                                |
 | `--lookback`           | 400                                 | 回看历史天数                                                                        |
 | `--no-limit`           | 关闭                                | 默认开启 ±10% 涨跌停约束，加此选项关闭                                              |
-| `--output-dir`         | outputs                             | 输出目录                                                                            |
+| `--output-dir`         | output                             | 输出目录                                                                            |
 
 ### 使用示例
 
@@ -216,7 +216,7 @@ python scripts/predict.py --no-limit 600000
 
 ### 输出文件说明
 
-每只股票生成两个文件，保存在 `outputs/` 目录下：
+每只股票生成两个文件，保存在 `output/` 目录下：
 
 | 文件                            | 说明                                                        |
 | ------------------------------- | ----------------------------------------------------------- |
@@ -330,7 +330,7 @@ python scripts/predict.py 600000 002741
 
 # 3. 在 WebUI 中查看结果
 # 浏览器打开 http://localhost:7070
-# 上传 outputs/pred_sh600000_20260506.csv 查看详细图表
+# 上传 output/pred_sh600000_20260506.csv 查看详细图表
 
 # 4. 停止服务
 ./start.sh stop
@@ -356,7 +356,7 @@ Kronos/
 │   ├── app.py             # Flask 应用
 │   ├── run.py             # Python 启动入口
 │   └── data/              # WebUI 数据目录
-├── outputs/               # 预测输出目录
+├── output/               # 预测输出目录
 │   ├── pred_sh600000_20260506.csv
 │   └── pred_sh600000_20260506_chart.html
 └── logs/                  # 运行日志

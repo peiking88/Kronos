@@ -34,7 +34,7 @@ from scripts.calibrate import backtest_calibrate
 # ---------------------------------------------------------------------------
 FACTOR_CACHE_1D = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "outputs", ".factor_1d.json",
+    "output", ".factor_1d.json",
 )
 FACTOR_CACHE_DAYS = 30
 FACTOR_WORKERS = 4
@@ -122,7 +122,7 @@ def prefetch_factors(codes, fresh_cache):
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tdx_import", "1d")
 SSE_DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tdx_import_sse", "1d", "data.pkl")
-MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs", "tdx_finetune")
+MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "tdx_finetune")
 
 LOOKBACK = 90
 PRED_LEN = 5
@@ -142,7 +142,7 @@ CONSENSUS_RUNS = 3
 
 STABILITY_THRESHOLD = 0.15
 STABILITY_CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                "outputs", ".pred_last.json")
+                                "output", ".pred_last.json")
 
 
 def derive_factor(code, df_hfq=None, verbose=True):
@@ -1118,10 +1118,10 @@ def main():
     if args.output:
         out_path = args.output
     elif from_zxg:
-        out_path = f"outputs/kronos-zxg-{today}.md"
+        out_path = f"output/kronos-zxg-{today}.md"
     else:
         codes_str = "_".join(codes[:3])
-        out_path = f"outputs/kronos_{codes_str}.md"
+        out_path = f"output/kronos_{codes_str}.md"
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w") as f:
         f.write(report)

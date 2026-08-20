@@ -13,7 +13,7 @@ Arguments:
     --symbol     Stock code (e.g. 002594 for BYD, 000001 for SSE Index)
 
 Output:
-    - Saves the prediction results to ./outputs/pred_<symbol>_data.csv and ./outputs/pred_<symbol>_chart.png
+    - Saves the prediction results to ./output/pred_<symbol>_data.csv and ./output/pred_<symbol>_chart.png
     - Logs and progress are printed to console
 
 Example:
@@ -32,7 +32,7 @@ sys.path.append("../")
 from model import Kronos, KronosTokenizer, KronosPredictor
 from scripts.calibrate import backtest_calibrate
 
-save_dir = "./outputs"
+save_dir = "./output"
 os.makedirs(save_dir, exist_ok=True)
 
 # Setting

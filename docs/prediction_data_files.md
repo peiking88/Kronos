@@ -15,10 +15,10 @@
 
 | 文件路径                                                                      | 格式        | 用途                                  | 读取位置                |
 | ----------------------------------------------------------------------------- | ----------- | ------------------------------------- | ----------------------- |
-| `outputs/tdx_finetune/tdx_tokenizer/checkpoints/best_model/model.safetensors` | safetensors | 微调后的 tokenizer 权重（行情编码器） | `predict_stocks.py:128` |
-| `outputs/tdx_finetune/tdx_tokenizer/checkpoints/best_model/config.json`       | json        | tokenizer 模型结构配置                | 同上                    |
-| `outputs/tdx_finetune/tdx_predictor/checkpoints/best_model/model.safetensors` | safetensors | 微调后的 predictor 权重（自回归预测） | `predict_stocks.py:131` |
-| `outputs/tdx_finetune/tdx_predictor/checkpoints/best_model/config.json`       | json        | predictor 模型结构配置                | 同上                    |
+| `output/tdx_finetune/tdx_tokenizer/checkpoints/best_model/model.safetensors` | safetensors | 微调后的 tokenizer 权重（行情编码器） | `predict_stocks.py:128` |
+| `output/tdx_finetune/tdx_tokenizer/checkpoints/best_model/config.json`       | json        | tokenizer 模型结构配置                | 同上                    |
+| `output/tdx_finetune/tdx_predictor/checkpoints/best_model/model.safetensors` | safetensors | 微调后的 predictor 权重（自回归预测） | `predict_stocks.py:131` |
+| `output/tdx_finetune/tdx_predictor/checkpoints/best_model/config.json`       | json        | predictor 模型结构配置                | 同上                    |
 
 > 由 `finetune/train_tokenizer_tdx.py` 和 `finetune/train_predictor_tdx.py` 训练生成。
 
@@ -53,17 +53,17 @@
 
 | 文件路径                                                    | 格式           | 用途                           | 生成位置                                       |
 | ----------------------------------------------------------- | -------------- | ------------------------------ | ---------------------------------------------- |
-| `outputs/.factor_1d.json`                                   | json           | 复权因子缓存（月度有效）        | `predict_stocks.py:prefetch_factors`            |
+| `output/.factor_1d.json`                                   | json           | 复权因子缓存（月度有效）        | `predict_stocks.py:prefetch_factors`            |
 
-> 因子由 TDengine 原始收盘价与后复权收盘价推导（hfq_close / raw_close），缓存到 outputs/.factor_1d.json 按月有效。
+> 因子由 TDengine 原始收盘价与后复权收盘价推导（hfq_close / raw_close），缓存到 output/.factor_1d.json 按月有效。
 
 ### 2.2 预测输出
 
 | 文件路径                                        | 格式        | 用途                            | 生成位置                |
 | ----------------------------------------------- | ----------- | ------------------------------- | ----------------------- |
-| `outputs/pred_{code}_{date}.csv`                | CSV         | predict.py 预测结果（实际价格） | `predict.py:300`        |
-| `outputs/pred_{code}_{date}_chart.html`         | Plotly HTML | 可视化交互图表                  | `predict.py:308`        |
-| `outputs/kronos_{codes}.md`                     | Markdown    | predict_stocks.py 预测+回测报告 | `predict_stocks.py:521` |
+| `output/pred_{code}_{date}.csv`                | CSV         | predict.py 预测结果（实际价格） | `predict.py:300`        |
+| `output/pred_{code}_{date}_chart.html`         | Plotly HTML | 可视化交互图表                  | `predict.py:308`        |
+| `output/kronos_{codes}.md`                     | Markdown    | predict_stocks.py 预测+回测报告 | `predict_stocks.py:521` |
 | `webui/prediction_results/prediction_{ts}.json` | JSON        | WebUI 预测结果                  | `webui/app.py:153`      |
 
 ---
@@ -72,10 +72,10 @@
 
 | 常量             | 值                                               | 定义位置                                 |
 | ---------------- | ------------------------------------------------ | ---------------------------------------- |
-| `MODEL_DIR`      | `outputs/tdx_finetune`                           | `predict_stocks.py:33`                   |
+| `MODEL_DIR`      | `output/tdx_finetune`                           | `predict_stocks.py:33`                   |
 | `DATA_DIR`       | `data/tdx_import/1d`                             | `predict_stocks.py:31`                   |
 | `SSE_DATA`       | `data/tdx_import_sse/1d/data.pkl`                | `predict_stocks.py:32`                   |
-| `FACTOR_CACHE_1D` | `outputs/.factor_1d.json`               | `predict_stocks.py:118`                   |
+| `FACTOR_CACHE_1D` | `output/.factor_1d.json`               | `predict_stocks.py:118`                   |
 | `LOOKBACK`        | 400 (predict.py) / 90 (predict_stocks.py) | `predict.py:41` / `predict_stocks.py:130` |
 | `MAX_STALE_DAYS` | 5                                                | `predict_stocks.py:43`                   |
 
@@ -96,7 +96,7 @@ TDengine tdx.k_{code}_1d
 后复权预测价格
     ↓ / factor → 实际价格
     ↓ 涨跌停校准 + 回测校准
-→ outputs/pred_{code}_{date}.csv + chart.html
+→ output/pred_{code}_{date}.csv + chart.html
 ```
 
 ### 4.2 predict_stocks.py（微调模型 + 本地 pkl）
@@ -110,12 +110,12 @@ data/tdx_import/1d/{test,val,train,data}.pkl（个股）
     ↓ 若数据过期（>5天），自动从 TDX 增量导入并合并
     ↓ 推导复权因子（缓存/推导/在线获取）
 factor 值
-    ↓ 加载本地微调模型（outputs/tdx_finetune/.../best_model）
+    ↓ 加载本地微调模型（output/tdx_finetune/.../best_model）
     ↓ 标准化 → 编码 → 自回归推理 → 解码 → 反标准化
 后复权预测价格
     ↓ / factor → 实际价格
     ↓ 涨跌停校准 + 回测校准
-→ outputs/kronos_{codes}.md
+→ output/kronos_{codes}.md
 ```
 
 ---
@@ -132,12 +132,12 @@ predict.py ──读取──→ TDengine tdx.k_{code}_1d
            ──调用──→ calibrate.py（纯计算）
 
 predict_stocks.py ──读取──→ data/tdx_import/*.pkl
-                  ──读取──→ outputs/tdx_finetune/.../best_model/*
+                  ──读取──→ output/tdx_finetune/.../best_model/*
                   ──调用──→ calibrate.py（纯计算）
                   ──调用──→ tdx_import.py（数据过期时增量导入）
 
 webui/app.py ──读取──→ data/**/*.pkl
-             ──读取──→ outputs/tdx_finetune/.../best_model/*（可选）
+             ──读取──→ output/tdx_finetune/.../best_model/*（可选）
              ──下载──→ HuggingFace 预训练模型（可选）
              ──调用──→ calibrate.py（纯计算）
 ```
@@ -150,5 +150,5 @@ webui/app.py ──读取──→ data/**/*.pkl
 
 1. **确保 TDengine 服务运行**（数据源）
 2. **运行 `scripts/tdx_import.py`** 生成 pkl 行情数据
-3. **完成模型微调**（`finetune/train_tokenizer_tdx.py` + `train_predictor_tdx.py`），生成 `outputs/tdx_finetune/` 下的模型权重
+3. **完成模型微调**（`finetune/train_tokenizer_tdx.py` + `train_predictor_tdx.py`），生成 `output/tdx_finetune/` 下的模型权重
 4. **运行 `scripts/predict_stocks.py`** 进行预测

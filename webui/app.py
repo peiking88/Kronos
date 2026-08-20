@@ -60,8 +60,8 @@ AVAILABLE_MODELS = {
     },
     'kronos-tdx': {
         'name': 'Kronos-TDX (Fine-tuned)',
-        'model_id': './outputs/tdx_finetune/tdx_predictor/checkpoints/best_model',
-        'tokenizer_id': './outputs/tdx_finetune/tdx_tokenizer/checkpoints/best_model',
+        'model_id': './output/tdx_finetune/tdx_predictor/checkpoints/best_model',
+        'tokenizer_id': './output/tdx_finetune/tdx_tokenizer/checkpoints/best_model',
         'context_length': 512,
         'params': '102.3M',
         'description': 'TDX 后复权数据微调，中位误差 2.3%'

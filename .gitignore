@@ -58,7 +58,6 @@ Desktop.ini
 *.safetensors
 
 # Output artifacts
-outputs/
 output/
 
 # Data directories

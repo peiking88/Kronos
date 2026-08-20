@@ -103,7 +103,7 @@ class TdxFineTuneConfig:
         # =================================================================
         self.use_comet = False  # Disabled by default for local training
 
-        self.save_path = "./outputs/tdx_finetune"
+        self.save_path = "./output/tdx_finetune"
         self.tokenizer_save_folder_name = 'tdx_tokenizer'
         self.predictor_save_folder_name = 'tdx_predictor'
         self.backtest_save_folder_name = 'tdx_backtest'
@@ -121,7 +121,7 @@ class TdxFineTuneConfig:
         # =================================================================
         # Backtesting
         # =================================================================
-        self.backtest_result_path = "./outputs/tdx_backtest_results"
+        self.backtest_result_path = "./output/tdx_backtest_results"
         self.backtest_n_symbol_hold = 50
         self.backtest_n_symbol_drop = 5
         self.backtest_hold_thresh = 5

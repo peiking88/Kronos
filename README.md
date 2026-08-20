@@ -320,7 +320,7 @@ python finetune/train_tokenizer_tdx.py \
 # Step 3: Fine-tune Predictor (30 epochs, ~5.4h, single GPU)
 python finetune/train_predictor_tdx.py \
   --data-dir ./data/tdx_import/1d \
-  --tokenizer-path ./outputs/tdx_finetune/tdx_tokenizer/checkpoints/best_model \
+  --tokenizer-path ./output/tdx_finetune/tdx_tokenizer/checkpoints/best_model \
   --epochs 30
 
 # Step 4: Verify with SSE Index prediction
@@ -341,7 +341,7 @@ python .claude/skills/finetune-kronos/scripts/predict_sse.py
 ### Hardware Requirements
 
 - GPU with >= 8GB VRAM (tested on RTX 4060 Laptop)
-- ~2GB disk for data, ~425MB for models, ~410MB for outputs
+- ~2GB disk for data, ~425MB for models, ~410MB for output
 - Internet access for one-time factor fetching from Sina Finance
 
 ### 💡 From Demo to Production: Important Considerations
@@ -379,10 +379,10 @@ source .venv/bin/activate
 .venv/bin/python scripts/predict_stocks.py --format console
 
 # 指定输出路径
-.venv/bin/python scripts/predict_stocks.py sz002741 -o outputs/my_pred.md
+.venv/bin/python scripts/predict_stocks.py sz002741 -o output/my_pred.md
 ```
 
-无参数时自动读取通达信自选股（zxg.blk）。报告含未来 10 日收盘价预测（实际市场价）、历史回测准确度、置信区间，按指数→看涨→看平→看跌分类排序。md 报告保存到 `outputs/` 后会自动复制一份到 `~/peiking88/tdx-cpp/output/kronos/`（目录不存在则自动创建，复制失败仅告警不中断）。
+无参数时自动读取通达信自选股（zxg.blk）。报告含未来 10 日收盘价预测（实际市场价）、历史回测准确度、置信区间，按指数→看涨→看平→看跌分类排序。md 报告保存到 `output/` 后会自动复制一份到 `~/peiking88/tdx-cpp/output/kronos/`（目录不存在则自动创建，复制失败仅告警不中断）。
 
 ### WebUI
 
@@ -418,7 +418,7 @@ bash start.sh status    # 状态
 # Predictor (~5.4h)
 .venv/bin/python finetune/train_predictor_tdx.py \
   --data-dir ./data/tdx_import/1d \
-  --tokenizer-path ./outputs/tdx_finetune/tdx_tokenizer/checkpoints/best_model \
+  --tokenizer-path ./output/tdx_finetune/tdx_tokenizer/checkpoints/best_model \
   --epochs 30
 ```
 

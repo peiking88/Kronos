@@ -280,7 +280,7 @@ def main():
     parser.add_argument("--samples", type=int, default=2, help="采样次数 (默认 2)")
     parser.add_argument("--lookback", type=int, default=LOOKBACK, help="回看天数 (默认 400)")
     parser.add_argument("--no-limit", action="store_true", help="不应用涨跌停约束")
-    parser.add_argument("--output-dir", default="outputs", help="输出目录 (默认 outputs)")
+    parser.add_argument("--output-dir", default="output", help="输出目录 (默认 output)")
     args = parser.parse_args()
 
     # 获取 TDengine 最新交易日期
