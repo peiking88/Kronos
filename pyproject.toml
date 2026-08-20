@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kronos"
-version = "1.6.11"
+version = "1.6.18"
 description = "Kronos: 金融市场基础模型，支持 A 股 TDX 本地数据微调与预测"
 readme = "README.md"
 license = "MIT"

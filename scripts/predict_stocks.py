@@ -17,7 +17,7 @@
     - 与上次预测结果对比，标注稳定性告警（预测跳变/方向翻转）
 """
 
-import argparse, os, sys, pickle, json, time
+import argparse, os, shutil, sys, pickle, json, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
@@ -1126,6 +1126,15 @@ def main():
     with open(out_path, "w") as f:
         f.write(report)
     print(f"\n报告已保存: {out_path}")
+
+    # 同步一份到 tdx-cpp 项目
+    sync_dir = os.path.expanduser("~/peiking88/tdx-cpp/output/kronos")
+    try:
+        os.makedirs(sync_dir, exist_ok=True)
+        shutil.copy2(out_path, os.path.join(sync_dir, os.path.basename(out_path)))
+        print(f"报告已复制: {sync_dir}/{os.path.basename(out_path)}")
+    except OSError as e:
+        print(f"[warn] 复制报告到 {sync_dir} 失败: {e}", file=sys.stderr)
     print(f"\n总耗时: {elapsed:.1f}s")
 
 

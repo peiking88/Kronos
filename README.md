@@ -382,7 +382,7 @@ source .venv/bin/activate
 .venv/bin/python scripts/predict_stocks.py sz002741 -o outputs/my_pred.md
 ```
 
-无参数时自动读取通达信自选股（zxg.blk）。报告含未来 10 日收盘价预测（实际市场价）、历史回测准确度、置信区间，按指数→看涨→看平→看跌分类排序。
+无参数时自动读取通达信自选股（zxg.blk）。报告含未来 10 日收盘价预测（实际市场价）、历史回测准确度、置信区间，按指数→看涨→看平→看跌分类排序。md 报告保存到 `outputs/` 后会自动复制一份到 `~/peiking88/tdx-cpp/output/kronos/`（目录不存在则自动创建，复制失败仅告警不中断）。
 
 ### WebUI
 
