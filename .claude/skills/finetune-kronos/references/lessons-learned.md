@@ -76,8 +76,8 @@ val_data.pkl 和 test_data.pkl 只含切分区间数据。模型推理需要 90 
 
 ## 依赖版本锁定
 
-| 包      | 版本     | 说明                       |
-| ------- | -------- | -------------------------- |
-| taos-ws-py | latest | TDengine WebSocket 连接器     |
+| 包         | 版本   | 说明                      |
+| ---------- | ------ | ------------------------- |
+| taos-ws-py | latest | TDengine WebSocket 连接器 |
 
 数据导入已切换至 TDengine，不再依赖 mootdx/opentdx/tdxdata。

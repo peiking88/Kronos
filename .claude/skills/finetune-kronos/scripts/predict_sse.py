@@ -24,8 +24,8 @@ def main():
     # ------------------------------------------------------------------
     # 1. Load fine-tuned models
     # ------------------------------------------------------------------
-    tokenizer_path = "./outputs/tdx_finetune/tdx_tokenizer/checkpoints/best_model"
-    predictor_path = "./outputs/tdx_finetune/tdx_predictor/checkpoints/best_model"
+    tokenizer_path = "./output/tdx_finetune/tdx_tokenizer/checkpoints/best_model"
+    predictor_path = "./output/tdx_finetune/tdx_predictor/checkpoints/best_model"
 
     print(f"Loading fine-tuned tokenizer: {tokenizer_path}")
     tokenizer = KronosTokenizer.from_pretrained(tokenizer_path).to(device)

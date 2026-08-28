@@ -54,7 +54,7 @@ class TdxFineTuneConfig:
 
         # Batch sizes tuned for GPU VRAM
         self.batch_size = 128        # Tokenizer: bf16 AMP (RTX 5080 16GB)
-        self.predictor_batch_size = 128  # Predictor: bf16 AMP (RTX 5080 16GB)
+        self.predictor_batch_size = 64   # Predictor: bf16 AMP (RTX 4060 8GB, 防 OOM)
         self.predictor_accumulation = 1  # Effective bs = 128 * 1 = 128
 
         # Number of samples per epoch

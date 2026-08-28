@@ -329,14 +329,14 @@ python .claude/skills/finetune-kronos/scripts/predict_sse.py
 
 ### What's Included
 
-| File                              | Purpose                                                                     |
-| --------------------------------- | --------------------------------------------------------------------------- |
-| `scripts/tdx_import.py`           | Import local TDX data with configurable price adjustment and factor caching |
-| `finetune/config_tdx.py`          | Single-GPU config (后复权, RTX 4060 8GB tuned)                              |
-| `finetune/train_tokenizer_tdx.py` | Tokenizer single-GPU training script                                        |
-| `finetune/train_predictor_tdx.py` | Predictor single-GPU training script (AMP fp16)                             |
-| `.claude/skills/finetune-kronos/scripts/predict_sse.py` | Prediction demo on SSE Composite Index (reads sh999999 from TDengine) |
-| `summary.md`                      | Full workflow summary and results                                           |
+| File                                                    | Purpose                                                                     |
+| ------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `scripts/tdx_import.py`                                 | Import local TDX data with configurable price adjustment and factor caching |
+| `finetune/config_tdx.py`                                | Single-GPU config (后复权, RTX 4060 8GB tuned)                              |
+| `finetune/train_tokenizer_tdx.py`                       | Tokenizer single-GPU training script                                        |
+| `finetune/train_predictor_tdx.py`                       | Predictor single-GPU training script (AMP fp16)                             |
+| `.claude/skills/finetune-kronos/scripts/predict_sse.py` | Prediction demo on SSE Composite Index (reads sh999999 from TDengine)       |
+| `summary.md`                                            | Full workflow summary and results                                           |
 
 ### Hardware Requirements
 
@@ -532,15 +532,16 @@ This project is licensed under the [MIT License](./LICENSE).
  tdxdata/tdxdata/core/registry.py                   |   3 -
 ```
 
-
 ### 2026-06-29 (预测脚本精简)
 
 精简 `scripts/predict_stocks.py`：
+
 - 删除 `fetch_stock_names()` 无操作函数，预测流程直接使用股票代码
 - 移除 `name_map` 变量，消除 `sh600000 (sh600000)` 冗余输出
 - 复权因子确认从 TDengine 获取，无需网络下载
 
 ### 2026-06-29 09:23:46
+
 ```
  .claude/skills/check-kronos-env/SKILL.md                     |   8 +-
  .claude/skills/finetune-kronos/SKILL.md                      | 158 +++++---------------
@@ -568,6 +569,7 @@ This project is licensed under the [MIT License](./LICENSE).
 - 全部 5286 只 TDengine 代码覆盖验证通过
 
 ### 2026-07-01 15:16:15
+
 ```
  scripts/predict_stocks.py | 131 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++----
  1 file changed, 127 insertions(+), 4 deletions(-)
@@ -583,4 +585,3 @@ This project is licensed under the [MIT License](./LICENSE).
 - 顺带修复：上证指数（sh000001）此前因 code 前缀推断丢失，现两市 000001 分别导出
 - 删除因此变死的 `_resolve_market`/`_code_to_symbol`/`_symbol_to_code`
 - 验证：pytest 41 passed + 连真实库冒烟（15953 symbols，两市 000001 精确区分）
-

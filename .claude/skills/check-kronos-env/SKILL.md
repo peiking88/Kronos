@@ -1,11 +1,11 @@
 ---
 name: check-kronos-env
-description: "Kronos 项目环境完整性检查与测试运行。检查 Python venv 完整性（含符号链接修复）、验证依赖包、运行回归测试、启动 WebUI 并验证 HTTP 可访问性。当用户提到 Kronos、kronos 环境检查、环境验证、运行测试、启动前后端、venv 修复、依赖检查、项目初始化、健康检查、检查环境、跑测试、启动项目时使用此技能。"
+description: "Kronos 项目环境完整性检查与测试运行。检查 Python venv 完整性（含符号链接修复）、扫描项目软链接有效性、验证依赖包、运行回归测试、启动 WebUI 并验证 HTTP 可访问性。当用户提到 Kronos、kronos 环境检查、环境验证、运行测试、启动前后端、venv 修复、依赖检查、项目初始化、健康检查、检查环境、跑测试、启动项目时使用此技能。"
 ---
 
 # Kronos 环境完整性检查技能
 
-本技能对 Kronos 项目（A股金融时序预测模型）进行完整的环境健康检查，覆盖从 Python 虚拟环境到模型推理验证的全链路。
+本技能对 Kronos 项目（A股金融时序预测模型）进行完整的环境健康检查，覆盖从 Python 虚拟环境、软链接有效性到模型推理验证的全链路。
 
 ## 项目上下文
 
@@ -14,7 +14,7 @@ description: "Kronos 项目环境完整性检查与测试运行。检查 Python 
 - **模型包**: 项目根目录下的 `model/`（含 `__init__.py`）
 - **测试**: `tests/test_kronos_regression.py`（pytest）
 - **WebUI**: `webui/app.py`（Flask，端口 7070）
-- **数据源**: TDX 本地数据 (`~/.local/share/tdxcfv/drive_c/tc/`)
+- **数据源**: **TDengine**（`tdx.kline` + `tdx.adjust`，通过 `taos-ws-py` WebSocket 连接；不再依赖 mootdx/opentdx/tdxdata）
 
 ## 执行流程
 
@@ -36,23 +36,52 @@ description: "Kronos 项目环境完整性检查与测试运行。检查 Python 
 
 **失败标志**: 激活 venv 后 `python --version` 无输出或报错。
 
+### 阶段 1.5：软链接有效性扫描
+
+扫描项目目录下的符号链接，检测并修复断裂链接。
+
+1. 扫描所有符号链接：
+   ```bash
+   find /home/li/peiking88/Kronos -type l
+   ```
+2. 逐个检查链接目标是否存在：
+   ```bash
+   find /home/li/peiking88/Kronos -type l ! -exec test -e {} \; -print
+   ```
+3. 对每个断裂链接：
+   - 记录路径和原指向目标（`ls -l <链接>`）
+   - 如果是 venv 内的链接（如 `.venv/bin/python*`），按阶段 1 的方式修复
+   - 如果是 `local/lib`、`local/bin` 下的 venv 内部链接，尝试重建：
+     ```bash
+     # 示例：修复 .venv/lib/python3.14/site-packages 下的断裂链接
+     cd /home/li/peiking88/Kronos/.venv
+     # 检查是否为相对路径链接
+     ls -la <断裂链接路径>
+     # 如果目标存在但路径不对，重建为绝对路径
+     ln -sf <正确目标绝对路径> <断裂链接路径>
+     ```
+   - 如果是其他文件（数据、模型等），报告但**不自动删除**，提示用户手动处理
+4. 汇总报告：正常链接数 / 断裂链接数（含路径和原目标）
+
+**失败标志**: 存在断裂链接且无法自动修复（如数据文件链接）。
+
 ### 阶段 2：依赖完整性验证
 
 关键依赖列表（任一缺失会导致后续阶段失败）：
 
-| 包名            | 用途         | 检查命令                 | 来源                                          |
-| --------------- | ------------ | ------------------------ | --------------------------------------------- |
-| torch           | 模型推理     | `import torch`           | requirements.txt                              |
-| pandas          | 数据处理     | `import pandas`          | requirements.txt                              |
-| numpy           | 数值计算     | `import numpy`           | requirements.txt                              |
-| einops          | 模型张量操作 | `import einops`          | requirements.txt                              |
-| safetensors     | 模型加载     | `import safetensors`     | requirements.txt                              |
-| tqdm            | 进度条       | `import tqdm`            | requirements.txt                              |
-| huggingface_hub | 模型下载     | `import huggingface_hub` | requirements.txt                              |
-| flask           | WebUI 后端   | `import flask`           | webui/requirements.txt                        |
-| flask_cors      | 跨域支持     | `import flask_cors`      | webui/requirements.txt                        |
-| plotly          | 图表渲染     | `import plotly`          | webui/requirements.txt                        |
-| taos-ws-py      | TDengine 连接 | `import taosws`          | requirements.txt                              |
+| 包名            | 用途                      | 检查命令                 | 来源                   |
+| --------------- | ------------------------- | ------------------------ | ---------------------- |
+| torch           | 模型推理                  | `import torch`           | requirements.txt       |
+| pandas          | 数据处理                  | `import pandas`          | requirements.txt       |
+| numpy           | 数值计算                  | `import numpy`           | requirements.txt       |
+| einops          | 模型张量操作              | `import einops`          | requirements.txt       |
+| safetensors     | 模型加载                  | `import safetensors`     | requirements.txt       |
+| tqdm            | 进度条                    | `import tqdm`            | requirements.txt       |
+| huggingface_hub | 模型下载                  | `import huggingface_hub` | requirements.txt       |
+| flask           | WebUI 后端                | `import flask`           | webui/requirements.txt |
+| flask_cors      | 跨域支持                  | `import flask_cors`      | webui/requirements.txt |
+| plotly          | 图表渲染                  | `import plotly`          | webui/requirements.txt |
+| taos-ws-py      | TDengine WebSocket 数据源 | `import taosws`          | requirements.txt       |
 
 **开发依赖**（仅运行测试需要，不在 requirements.txt 中）：
 
@@ -66,13 +95,27 @@ description: "Kronos 项目环境完整性检查与测试运行。检查 Python 
 如果存在缺失包，按来源分组安装：
 
 ```bash
-# 核心依赖
+# 核心依赖（含 taos-ws-py 数据源）
 pip install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
 # WebUI 依赖
 pip install -i https://mirrors.aliyun.com/pypi/simple/ -r webui/requirements.txt
 # 开发依赖
 pip install -i https://mirrors.aliyun.com/pypi/simple/ pytest
 ```
+
+**TDengine 连通性验证**（taos-ws-py 安装后执行）：
+
+```bash
+.venv/bin/python -c "
+from taosws import connect
+c = connect()
+r = c.query('select count(*) from tdx.kline limit 1')
+print('TDengine OK, kline rows:', list(r)[0][0])
+c.close()
+"
+```
+
+> TDengine 是唯一的行情数据源。`tdx.kline`（OHLCV + 子表 `k_{market}{code}_1d`）和 `tdx.adjust`（分红送转配股事件）均需可达，否则后续数据导入/预测步骤会静默失败。
 
 **关于 matplotlib**：`requirements.txt` 中固定了 `matplotlib==3.9.3`，但该版本与 Python 3.14 不兼容（legend RecursionError）。如果安装时报错或 import 失败，可忽略——项目已全面使用 plotly 替代 matplotlib。后续建议从 requirements.txt 中移除 matplotlib。
 
@@ -129,6 +172,12 @@ PYTHONPATH=. pytest tests/test_kronos_regression.py -v --timeout=550
 - venv: 正常 / 已修复 / 异常
 - CUDA: 可用 (GPU 名称) / 不可用 (CPU 模式)
 
+## 软链接
+- 总链接数: N
+- 断裂链接: 0 (正常) / M (异常)
+- 已修复: K 个
+- ❌ <断裂链接路径> -> <目标> (无法自动修复)
+
 ## 依赖 (N/M 通过)
 - ✅ torch 2.x.x
 - ⚠️ matplotlib (不兼容 Python 3.14，可忽略)
@@ -146,19 +195,22 @@ PYTHONPATH=. pytest tests/test_kronos_regression.py -v --timeout=550
 
 ## 已知问题与修复
 
-| 问题                                           | 原因                                   | 修复方式                                                     |
-| ---------------------------------------------- | -------------------------------------- | ------------------------------------------------------------ |
-| venv 中无 python 可执行文件                    | 项目迁移后绝对路径符号链接失效         | 重建指向系统 python 的链接                                   |
-| `ModuleNotFoundError: No module named 'model'` | pytest 未设置 PYTHONPATH               | `PYTHONPATH=. pytest`                                        |
-| matplotlib legend RecursionError               | Python 3.14 与 matplotlib 3.9.x 不兼容 | 使用 plotly 代替，可从 requirements.txt 移除 matplotlib      |
-| kaleido PNG 导出失败                           | kaleido 1.x 需要浏览器引擎             | 改用 `fig.write_html()`                                      |
-| plotly `add_vline` TypeError                   | pandas 3.x Timestamp 加法不兼容        | 使用 `fig.add_shape()` 代替                                  |
-| TDengine 连接失败                              | TDengine 服务未启动或配置错误          | 检查 taosd 服务状态与连接参数                                |
-| `import taosws` 失败                           | taos-ws-py 未安装                      | `pip install taos-ws-py`                                    |
+| 问题                                           | 原因                                           | 修复方式                                                                             |
+| ---------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------ |
+| venv 中无 python 可执行文件                    | 项目迁移后绝对路径符号链接失效                 | 重建指向系统 python 的链接                                                           |
+| `.venv/lib/` 下大量断裂链接                    | venv 迁移后 site-packages 中的绝对路径链接失效 | 删除 venv 重新创建：`rm -rf .venv && python3.14 -m venv .venv`，再重装依赖           |
+| `.venv/local/` 下断裂链接                      | venv 内部相对路径计算错误                      | 同上，重建 venv 最可靠                                                               |
+| 项目文件断裂链接                               | 目标被移动或删除                               | 用 `ls -l <链接>` 查看指向，确认目标是否存在后决定删除还是重建                       |
+| `ModuleNotFoundError: No module named 'model'` | pytest 未设置 PYTHONPATH                       | `PYTHONPATH=. pytest`                                                                |
+| matplotlib legend RecursionError               | Python 3.14 与 matplotlib 3.9.x 不兼容         | 使用 plotly 代替，可从 requirements.txt 移除 matplotlib                              |
+| kaleido PNG 导出失败                           | kaleido 1.x 需要浏览器引擎                     | 改用 `fig.write_html()`                                                              |
+| plotly `add_vline` TypeError                   | pandas 3.x Timestamp 加法不兼容                | 使用 `fig.add_shape()` 代替                                                          |
+| `import taosws` 失败                           | taos-ws-py 未安装                              | `pip install taos-ws-py`（走 requirements.txt）                                      |
+| TDengine 连接失败                              | taos-ws-py 已安装但连不上库                    | 检查 TDengine 服务状态 + DSN（默认 `connect()` 直连本地）；数据导入/预测均依赖此连接 |
 
 ## 边界情况
 
 - 如果用户只想检查环境不想启动 WebUI，执行阶段 1-3 + 5 即可
 - 如果用户只想跑测试，执行阶段 1-2 + 3 即可
-- 如果用户说"全部检查"，执行完整 5 个阶段
-- 如果没有 TDX 数据，跳过数据相关检查，不影响其他阶段
+- 如果用户说"全部检查"，执行完整 5+1 个阶段（含软链接扫描）
+- 如果 TDengine 不可达，标记数据阶段异常（但 venv/依赖/WebUI 检查仍正常执行）；数据源是预测的前置，不可跳过

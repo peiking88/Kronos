@@ -25,26 +25,26 @@ cd Kronos
 
 2. 确保 `finetune/` 目录下存在以下 TDX 适配脚本（随宿主项目分发，**不在本技能包内**）：
 
-| 文件                              | 作用                                           |
-| --------------------------------- | ---------------------------------------------- |
-| `finetune/config_tdx.py`          | 单卡微调配置（后复权、TDX 时间范围）             |
-| `finetune/train_tokenizer_tdx.py` | Tokenizer 单卡训练（bf16 AMP）                 |
-| `finetune/train_predictor_tdx.py` | Predictor 单阶段训练（bf16 AMP）               |
-| `finetune/dataset.py`             | 数据集加载器                                    |
-| `model/kronos.py`                 | Kronos/KronosTokenizer 模型定义                |
+| 文件                              | 作用                                 |
+| --------------------------------- | ------------------------------------ |
+| `finetune/config_tdx.py`          | 单卡微调配置（后复权、TDX 时间范围） |
+| `finetune/train_tokenizer_tdx.py` | Tokenizer 单卡训练（bf16 AMP）       |
+| `finetune/train_predictor_tdx.py` | Predictor 单阶段训练（bf16 AMP）     |
+| `finetune/dataset.py`             | 数据集加载器                         |
+| `model/kronos.py`                 | Kronos/KronosTokenizer 模型定义      |
 
 ## 前置条件
 
 确认以下环境就绪后再开始：
 
-| 条件         | 检查命令                                                     | 要求                                           |
-| ------------ | ------------------------------------------------------------ | ---------------------------------------------- |
-| GPU          | `nvidia-smi`                                                 | >= 8GB VRAM（推荐 16GB 如 RTX 5080）           |
-| PyTorch CUDA | `python -c "import torch; print(torch.cuda.is_bf16_supported())"` | True（bf16 原生支持）                          |
-| TDengine 连接 | `python -c "from taosws import connect; connect()"` | 可连接 |
-| 磁盘空间     | `df -h .`                                                    | >= 2GB（160MB 数据 + 425MB 模型 + 410MB 输出） |
-| HF 镜像      | `curl -s --connect-timeout 5 https://hf-mirror.com`          | 可访问                                         |
-| TDengine     | `python -c "from taosws import connect; connect()"`          | 已连接（数据源）                               |
+| 条件          | 检查命令                                                          | 要求                                           |
+| ------------- | ----------------------------------------------------------------- | ---------------------------------------------- |
+| GPU           | `nvidia-smi`                                                      | >= 8GB VRAM（推荐 16GB 如 RTX 5080）           |
+| PyTorch CUDA  | `python -c "import torch; print(torch.cuda.is_bf16_supported())"` | True（bf16 原生支持）                          |
+| TDengine 连接 | `python -c "from taosws import connect; connect()"`               | 可连接                                         |
+| 磁盘空间      | `df -h .`                                                         | >= 2GB（160MB 数据 + 425MB 模型 + 410MB 输出） |
+| HF 镜像       | `curl -s --connect-timeout 5 https://hf-mirror.com`               | 可访问                                         |
+| TDengine      | `python -c "from taosws import connect; connect()"`               | 已连接（数据源）                               |
 
 ### 首次环境初始化
 
@@ -180,36 +180,36 @@ python .claude/skills/finetune-kronos/scripts/predict_sse.py
 
 ### `finetune/config_tdx.py` 关键字段速查
 
-| 字段                              | 默认  | 说明                                |
-| --------------------------------- | ----- | ----------------------------------- |
-| `lookback_window`                 | 90    | 模型可见的历史交易日数              |
-| `predict_window`                  | 10    | 训练时的预测窗口                    |
-| `dividend_type`                   | "back"| 后复权                              |
-| `batch_size`                      | 128   | Tokenizer 批大小（bf16 AMP）        |
-| `predictor_batch_size`            | 64    | Predictor 批大小（bf16 AMP）        |
-| `tokenizer_learning_rate`         | 2e-4  | Tokenizer 学习率                    |
-| `predictor_learning_rate`         | 4e-5  | Predictor 学习率                    |
-| `epochs`                          | 10    | Predictor epoch 数                  |
-| `use_amp`                         | True  | bf16 AMP 开关                       |
+| 字段                      | 默认   | 说明                         |
+| ------------------------- | ------ | ---------------------------- |
+| `lookback_window`         | 90     | 模型可见的历史交易日数       |
+| `predict_window`          | 10     | 训练时的预测窗口             |
+| `dividend_type`           | "back" | 后复权                       |
+| `batch_size`              | 128    | Tokenizer 批大小（bf16 AMP） |
+| `predictor_batch_size`    | 64     | Predictor 批大小（bf16 AMP） |
+| `tokenizer_learning_rate` | 2e-4   | Tokenizer 学习率             |
+| `predictor_learning_rate` | 4e-5   | Predictor 学习率             |
+| `epochs`                  | 10     | Predictor epoch 数           |
+| `use_amp`                 | True   | bf16 AMP 开关                |
 
 ## 显存配置
 
 在 RTX 5080 16GB 上实测：
 
-| 配置       | Tokenizer    | Predictor |
-| ---------- | ------------ | --------- |
-| Batch size | 128 (bf16)   | 64 (bf16) |
-| 显存占用   | ~2.5 GB      | ~10.8 GB   |
-| 每 Epoch   | 0.5 分钟     | 3.5 分钟   |
+| 配置       | Tokenizer  | Predictor |
+| ---------- | ---------- | --------- |
+| Batch size | 128 (bf16) | 64 (bf16) |
+| 显存占用   | ~2.5 GB    | ~10.8 GB  |
+| 每 Epoch   | 0.5 分钟   | 3.5 分钟  |
 
 8GB GPU（RTX 4060）：降低 `batch_size` 至 32-50，Tokenizer 可保持 bs=64。
 
 ## 训练效果
 
-| 方案 | Val Loss | 说明 |
-|------|----------|------|
-| 预训练 Kronos-base | ~4.2 | HuggingFace 预训练 |
-| **全参数微调** | **3.03** | ✅ 10 epoch 稳定下降 |
+| 方案               | Val Loss | 说明                 |
+| ------------------ | -------- | -------------------- |
+| 预训练 Kronos-base | ~4.2     | HuggingFace 预训练   |
+| **全参数微调**     | **3.03** | ✅ 10 epoch 稳定下降 |
 
 ## 环境重建 / 项目迁移
 
@@ -224,9 +224,9 @@ pip install pytest pytest-timeout
 
 ## 常见陷阱
 
-| 现象 | 根因 | 修复 |
-| ---- | ---- | ---- |
+| 现象                                           | 根因                              | 修复                               |
+| ---------------------------------------------- | --------------------------------- | ---------------------------------- |
 | `from_pretrained` 报 positional arguments 错误 | `config.json` 下载失败，HF 不可达 | 确认 `HF_ENDPOINT` 已写入 activate |
-| Val Loss 上升 | 学习率过高或 batch 太小 | lr=4e-5, bs=64 |
-| GPU OOM | Batch size 超出显存 | 降低 bs 至 32-50 |
-| 复权因子缓存不一致 | 行情修复导致因子漂移 | 删除缓存重导数据 |
+| Val Loss 上升                                  | 学习率过高或 batch 太小           | lr=4e-5, bs=64                     |
+| GPU OOM                                        | Batch size 超出显存               | 降低 bs 至 32-50                   |
+| 复权因子缓存不一致                             | 行情修复导致因子漂移              | 删除缓存重导数据                   |

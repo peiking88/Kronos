@@ -503,13 +503,16 @@ class TdxDataImporter:
             split_order = ["train", "val", "test"]
             for split_name in split_order:
                 s_start, s_end = splits[split_name]
+                # 日线时间戳为 15:00 收盘时刻，上界需含末日全天（< end+1d），
+                # 否则纯日期比较 (<= end 00:00) 会丢失末日 bar
+                s_end_excl = pd.Timestamp(s_end) + pd.Timedelta(days=1)
                 split_data = {}
                 for sym, sdf in dataset.items():
                     if split_name == "train":
-                        mask = (sdf.index >= s_start) & (sdf.index <= s_end)
+                        mask = (sdf.index >= s_start) & (sdf.index < s_end_excl)
                     else:
                         pad_start = pd.Timestamp(s_start) - pd.Timedelta(days=int(lookback_pad * 1.5))
-                        mask = (sdf.index >= pad_start) & (sdf.index <= s_end)
+                        mask = (sdf.index >= pad_start) & (sdf.index < s_end_excl)
                     subset = sdf[mask]
                     if not subset.empty:
                         split_data[sym] = subset
