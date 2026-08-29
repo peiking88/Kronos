@@ -585,3 +585,18 @@ This project is licensed under the [MIT License](./LICENSE).
 - 顺带修复：上证指数（sh000001）此前因 code 前缀推断丢失，现两市 000001 分别导出
 - 删除因此变死的 `_resolve_market`/`_code_to_symbol`/`_symbol_to_code`
 - 验证：pytest 41 passed + 连真实库冒烟（15953 symbols，两市 000001 精确区分）
+
+### 2026-08-29 06:36:57
+
+```
+ .claude/skills/check-kronos-env/SKILL.md                     | 108 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++----------------------------
+ .claude/skills/finetune-kronos/SKILL.md                      |  80 ++++++++++++++++++++++++++++++++++++++++----------------------------------------
+ .claude/skills/finetune-kronos/references/lessons-learned.md |   6 +++---
+ .claude/skills/finetune-kronos/scripts/predict_sse.py        |   4 ++--
+ README.md                                                    |  21 +++++++++++----------
+ finetune/config_tdx.py                                       |   2 +-
+ model/__init__.py                                            |   2 +-
+ pyproject.toml                                               |   2 +-
+ scripts/tdx_import.py                                        |   7 +++++--
+ 9 files changed, 144 insertions(+), 88 deletions(-)
+```

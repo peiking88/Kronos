@@ -42,6 +42,10 @@ def filter_stocks(stocks, exclude_00=False, exclude_bj=True):
             continue
         if exclude_bj and s.startswith("bj"):
             continue
+        # sh88xxxx 是通达信板块/概念指数（计算指标非证券），TDengine 中该批
+        # 数据为乱码（close 随机跳变、low=0.01），剔除
+        if s.startswith("sh88"):
+            continue
         out.append(s)
     return out
 

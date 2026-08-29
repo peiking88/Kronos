@@ -173,7 +173,11 @@ def _compute_back_adjust_factor(df: pd.DataFrame, events: list[dict]) -> np.ndar
 
     Factor accumulates from newest to oldest bar:
       factor[latest] = 1.0
-      On dividend event: factor[bars before event] *= multiplier
+      On dividend event: factor[bars before event] /= multiplier
+
+    除权使价格向下跳变（送转/派息），后复权需将除权前的历史压低（÷multiplier）
+    使序列连续。曾误用 *= multiplier（抬升历史），导致除权日复权后跳空被放大
+    multiplier 倍而非消除——所有含除权事件的标的整个历史 OHLC 均错误。
 
     Multiplier formula (TDX standard):
       D = fenhong/10, S = songzhuangu/10, P = peigu/10, Pp = peigujia
@@ -218,7 +222,7 @@ def _compute_back_adjust_factor(df: pd.DataFrame, events: list[dict]) -> np.ndar
         if abs(multiplier - 1.0) < 1e-12:
             continue
 
-        factor[:event_idx] *= multiplier
+        factor[:event_idx] /= multiplier
 
     return factor
 
@@ -234,20 +238,54 @@ def _apply_adjustment(df: pd.DataFrame, factor: np.ndarray) -> pd.DataFrame:
     return df_adj
 
 
-def _detect_unadjusted_splits(df: pd.DataFrame, factor: np.ndarray) -> np.ndarray:
-    """检测 adjust 表未覆盖的份额拆分（基金/ETF 无 tdx.a_* 表）。
+def _price_limit_ratio(symbol: str, dates) -> np.ndarray:
+    """按板块返回每根 bar 的「单日不可能跌幅」阈值。
 
-    基金（如 ETF）没有 adjust 表，份额拆分（如 1:3）在事件复权后的收盘序列里
-    表现为一根不可能的隔夜跳跌：ratio = close[i]/close[i-1] < 0.5。任何 A 股
-    单日涨跌幅都不会跌破 0.833（科创/创业 ±20% 下限），故 < 0.5 必为拆分。
+    ratio 低于该阈值必为除权/拆分/数据异常（不可能由市场交易产生）：
+    - 创业板(sz30)/科创板(sh68)：±20% → 0.78（留 2% 余量）
+    - 主板(sh60/sz00)：±10% → 0.885（1996-12-16 实施涨跌停制度前无限制 → 0.5）
+    - 指数等其他（sh00/sh99/sz39/sh88）：无固定跌停，板块调整跳空属数据
+      特性，仅对极端跳空(<0.5)兜底
+    """
+    if symbol.startswith(('sz30', 'sh68')):
+        return np.full(len(dates), 0.78)
+    if symbol[:4] in ('sh60', 'sz00'):
+        cutoff = np.datetime64('1996-12-16')
+        arr = np.full(len(dates), 0.5)
+        arr[dates.values >= cutoff] = 0.885
+        return arr
+    return np.full(len(dates), 0.5)
 
-    以观测 ratio 缩放拆分前的 bar，使序列在最新（拆分后）价位连续。这会吸收
-    拆分当日市场涨跌幅进历史价位（小幅畸变），但消除了 60%+ 的虚假跳空——
-    后者对模型危害远大于前者。
 
-    ponytail: 仅扫事件复权后的 close；已被事件解释的拆分不会重复触发。
+def _detect_unadjusted_splits(
+    df: pd.DataFrame,
+    factor: np.ndarray,
+    symbol: str = '',
+    zero_event_dates: Optional[set] = None,
+) -> np.ndarray:
+    """检测事件复权未消除的除权跳空，按观测比值兜底缩放。
+
+    两类场景：
+    1. 基金/ETF 无 tdx.a_* 表，份额拆分（如 1:3）表现为不可能的隔夜跳跌；
+    2. 深市部分年度除权事件无 category=1 行（如 sz000001 2013-2016 送股
+       只有「送配股上市」行，无数值），事件复权无法消除跳空。
+
+    判定规则（按板块涨跌幅限制分层，见 _price_limit_ratio）：
+    - hard: 复权后 ratio 低于板块不可能跌幅阈值 —— 必为除权/拆分；
+    - soft: 0.78 <= ratio < 0.96 且该日存在 category=1 的全零事件行 ——
+      除权除息行值解析失败（当前库无此类行，规则实际不触发，留作防御）。
+      注意不能放宽到全部事件行：cat=2-15 的股本事件行数值本来就为 0，
+      正常跌幅日恰逢股本事件会被误修复。
+
+    以观测 ratio 缩放跳空前的 bar，使序列在最新价位连续。这会吸收当日
+    市场涨跌幅进历史价位（小幅畸变），但消除了虚假跳空——后者危害更大。
+
+    ponytail: 仅扫事件复权后的 close；已被事件正确解释的除权不会触发。
     """
     closes = df['close'].values
+    dates = df.index
+    zero_event_dates = zero_event_dates or set()
+    thresholds = _price_limit_ratio(symbol, dates)
     n = len(closes)
     for i in range(n - 1, 0, -1):  # 新→旧，factor 累积正确
         prev = closes[i - 1] * factor[i - 1]
@@ -255,7 +293,9 @@ def _detect_unadjusted_splits(df: pd.DataFrame, factor: np.ndarray) -> np.ndarra
         if prev <= 0 or curr <= 0:
             continue
         ratio = curr / prev
-        if ratio < 0.5:
+        is_hard = ratio < thresholds[i]
+        is_soft = (ratio < 0.96) and (dates[i] in zero_event_dates)
+        if is_hard or is_soft:
             factor[:i] *= ratio
     return factor
 
@@ -264,31 +304,39 @@ def _detect_unadjusted_splits(df: pd.DataFrame, factor: np.ndarray) -> np.ndarra
 # TDengine data access
 # ---------------------------------------------------------------------------
 
-def _query_adjust_events(conn, symbol: str) -> list[dict]:
+def _query_adjust_events(conn, symbol: str) -> tuple[list[dict], set]:
     """Query dividend events from TDengine adjust table. symbol 形如 'sz000001'。
 
-    Returns list of event dicts sorted by date ascending.
+    Returns:
+        (events, zero_dates): 有效事件列表（按日期升序），以及 category=1
+        （除权除息）但四数值字段全零的日期集合 —— 仅此类行才是真正的解析
+        失败；cat=2-15 的股本事件行（送配股上市/股本变化等）数值为 0 是
+        协议设计使然，不属于解析失败，不得进入 zero_dates。
     """
     events = []
+    zero_dates = set()
     try:
         r = conn.query(
-            f"select ts, fenhong, peigujia, songzhuangu, peigu "
+            f"select ts, fenhong, peigujia, songzhuangu, peigu, category "
             f"from tdx.a_{symbol} order by ts"
         )
         for row in r:
-            ts, fh, pj, sz, pg = row
+            ts, fh, pj, sz, pg, cat = row
             fh, pj, sz, pg = float(fh), float(pj), float(sz), float(pg)
+            dt = pd.Timestamp(ts).tz_localize(None)
             if fh > 0 or sz > 0 or pg > 0:
                 events.append({
-                    'date': pd.Timestamp(ts).tz_localize(None),
+                    'date': dt,
                     'fenhong': fh,
                     'peigujia': pj,
                     'songzhuangu': sz,
                     'peigu': pg,
                 })
+            elif cat == 1:
+                zero_dates.add(dt)
     except Exception:
         pass  # no adjust data for this stock, leave unadjusted
-    return events
+    return events, zero_dates
 
 
 def _query_daily_kline(conn, symbol: str) -> pd.DataFrame | None:
@@ -356,9 +404,9 @@ def _fetch_stock_daily(conn, symbol: str, dividend_type: str) -> pd.DataFrame | 
         return None
 
     if dividend_type == "back":
-        events = _query_adjust_events(conn, symbol)
+        events, zero_dates = _query_adjust_events(conn, symbol)
         factor = _compute_back_adjust_factor(df, events)
-        factor = _detect_unadjusted_splits(df, factor)
+        factor = _detect_unadjusted_splits(df, factor, symbol, zero_dates)
         df = _apply_adjustment(df, factor)
 
     df = df.reset_index()
